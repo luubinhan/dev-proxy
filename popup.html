@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DevProxy</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>DevProxy</h1>
+      <div class="toggle-container">
+        <label class="switch">
+          <input type="checkbox" id="enableToggle">
+          <span class="slider"></span>
+        </label>
+        <span id="statusText">Disabled</span>
+      </div>
+    </header>
+
+    <div class="rules-section">
+      <div class="section-header">
+        <h2>Intercept Rules</h2>
+        <button id="addRuleBtn" class="btn btn-primary">+ Add Rule</button>
+      </div>
+      
+      <div id="rulesList" class="rules-list">
+        <!-- Rules will be dynamically added here -->
+      </div>
+    </div>
+
+    <!-- Add/Edit Rule Modal -->
+    <div id="ruleModal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 id="modalTitle">Add Rule</h3>
+          <span class="close">&times;</span>
+        </div>
+        
+        <form id="ruleForm">
+          <div class="form-group">
+            <label for="urlPattern">URL Pattern (RegEx)</label>
+            <input type="text" id="urlPattern" placeholder="e.g., .*api\.example\.com.*" required>
+            <small>Use regular expressions to match URLs</small>
+          </div>
+
+          <div class="form-group">
+            <label for="statusCode">Status Code</label>
+            <select id="statusCode">
+              <option value="200">200 - OK</option>
+              <option value="201">201 - Created</option>
+              <option value="204">204 - No Content</option>
+              <option value="301">301 - Moved Permanently</option>
+              <option value="302">302 - Found</option>
+              <option value="304">304 - Not Modified</option>
+              <option value="400">400 - Bad Request</option>
+              <option value="401">401 - Unauthorized</option>
+              <option value="403">403 - Forbidden</option>
+              <option value="404">404 - Not Found</option>
+              <option value="500">500 - Internal Server Error</option>
+              <option value="502">502 - Bad Gateway</option>
+              <option value="503">503 - Service Unavailable</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="delay">Delay (ms)</label>
+            <input type="number" id="delay" placeholder="0" min="0" value="0">
+          </div>
+
+          <div class="form-group">
+            <label for="responseBody">Response Body</label>
+            <textarea id="responseBody" rows="6" placeholder='{"message": "Custom response"}'></textarea>
+            <small>Can be JSON or plain text</small>
+          </div>
+
+          <div class="form-actions">
+            <button type="button" id="cancelBtn" class="btn btn-secondary">Cancel</button>
+            <button type="submit" class="btn btn-primary">Save Rule</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

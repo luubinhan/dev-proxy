@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "DevProxy",
+  "version": "1.0.0",
+  "description": "Intercept, modify, and delay network requests",
+  "permissions": [
+    "debugger",
+    "storage",
+    "tabs",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
