@@ -111,27 +111,33 @@ function displayRules(rules) {
     <div class="rule-item ${rule.enabled ? '' : 'disabled'}">
       <div class="rule-header">
         <span class="rule-pattern">${escapeHtml(rule.urlPattern)}</span>
-        <div class="rule-actions">
-          <button class="btn btn-icon btn-toggle" data-index="${index}">
-            ${rule.enabled ? '✓' : '○'}
-          </button>
-          <button class="btn btn-icon btn-edit" data-index="${index}">Edit</button>
-          <button class="btn btn-icon btn-danger btn-delete" data-index="${index}">Delete</button>
-        </div>
+        
       </div>
       <div class="rule-details">
-        <div class="rule-detail">
-          <strong>Status:</strong> <span class="rule-status">${rule.statusCode || 200}</span>
-        </div>
-        ${rule.delay ? `
+        <div class="rule-detail-group">
           <div class="rule-detail">
-            <strong>Delay:</strong> ${rule.delay}ms
+            <strong>Status:</strong> <span class="rule-status" data-color="${formatStatusCode(rule.statusCode)}">${rule.statusCode || 200}</span>
           </div>
-        ` : ''}
+          ${rule.delay ? `
+            <div class="rule-detail">
+              <strong>Delay:</strong> ${rule.delay}ms
+            </div>
+          ` : ''}
+          <div class="rule-actions">
+            <button class="btn btn-icon btn-toggle" data-index="${index}">
+              ${rule.enabled ? '🟢' : '⚪'}
+            </button>
+            <button class="btn btn-icon btn-edit" data-index="${index}">⚙️</button>
+            <button class="btn btn-icon btn-danger btn-delete" data-index="${index}">Delete</button>
+          </div>
+        </div>
+        
         ${rule.responseBody ? `
+        <div class="rule-detail-group">
           <div class="rule-detail">
             <strong>Custom Response:</strong> Yes
           </div>
+        </div>
         ` : ''}
       </div>
     </div>
@@ -275,6 +281,16 @@ function sendMessage(message) {
       }
     });
   });
+}
+
+// Format status code to grouped range (2xx, 3xx, 4xx, 5xx)
+function formatStatusCode(statusCode) {
+  const code = statusCode || 200;
+  if (code >= 200 && code < 300) return '2xx';
+  if (code >= 300 && code < 400) return '3xx';
+  if (code >= 400 && code < 500) return '4xx';
+  if (code >= 500 && code < 600) return '5xx';
+  return code.toString();
 }
 
 // Escape HTML to prevent XSS
