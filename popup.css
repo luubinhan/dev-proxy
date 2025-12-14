@@ -111,6 +111,16 @@ input:checked + .slider:before {
 .rules-list {
   max-height: 400px;
   overflow-y: auto;
+
+  &.intercept-inactive {
+    opacity: 0.4;
+    pointer-events: none;
+    cursor: not-allowed;
+  }
+  &.intercept-active {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .rule-item {

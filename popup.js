@@ -59,6 +59,7 @@ async function loadStatus() {
   const response = await sendMessage({ action: 'getStatus' });
   enableToggle.checked = response.isEnabled;
   updateStatusText(response.isEnabled);
+  rulesList.className = response.isEnabled ? 'rules-list intercept-active' : 'rules-list intercept-inactive';
 }
 
 // Update status text
@@ -79,6 +80,7 @@ async function handleToggleChange(e) {
     
     if (response.success) {
       updateStatusText(enabled);
+      rulesList.className = enabled ? 'rules-list intercept-active' : 'rules-list intercept-inactive';
     } else {
       // Revert toggle if failed
       e.target.checked = !enabled;
