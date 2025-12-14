@@ -6,6 +6,7 @@ let currentEditIndex = -1;
 const enableToggle = document.getElementById('enableToggle');
 const statusText = document.getElementById('statusText');
 const addRuleBtn = document.getElementById('addRuleBtn');
+const clearAllBtn = document.getElementById('clearAllBtn');
 const rulesList = document.getElementById('rulesList');
 const ruleModal = document.getElementById('ruleModal');
 const modalTitle = document.getElementById('modalTitle');
@@ -24,6 +25,7 @@ async function init() {
 function setupEventListeners() {
   enableToggle.addEventListener('change', handleToggleChange);
   addRuleBtn.addEventListener('click', () => openModal());
+  clearAllBtn.addEventListener('click', clearAllRules);
   cancelBtn.addEventListener('click', closeModal);
   closeBtn.addEventListener('click', closeModal);
   ruleForm.addEventListener('submit', handleFormSubmit);
@@ -110,35 +112,33 @@ function displayRules(rules) {
   rulesList.innerHTML = rules.map((rule, index) => `
     <div class="rule-item ${rule.enabled ? '' : 'disabled'}">
       <div class="rule-header">
-        <span class="rule-pattern">${escapeHtml(rule.urlPattern)}</span>
-        
+        <button class="btn-toggle" data-index="${index}">
+          ${rule.enabled ? '🟢' : '⚪'}
+        </button>
+        <span class="rule-pattern">${escapeHtml(rule.urlPattern)}</span>        
       </div>
       <div class="rule-details">
         <div class="rule-detail-group">
           <div class="rule-detail">
-            <strong>Status:</strong> <span class="rule-status" data-color="${formatStatusCode(rule.statusCode)}">${rule.statusCode || 200}</span>
+            <span class="rule-status" data-color="${formatStatusCode(rule.statusCode)}">${rule.statusCode || 200}</span>
           </div>
           ${rule.delay ? `
             <div class="rule-detail">
-              <strong>Delay:</strong> ${rule.delay}ms
+              <span>Delay</span> <span class="tag">${rule.delay}ms</span>
             </div>
           ` : ''}
+          ${rule.responseBody ? `
+          <div class="rule-detail-group">
+            <div class="rule-detail">
+              <span>Custom Response</span> <span class="tag">Yes</span>
+            </div>
+          </div>
+          ` : ''}
           <div class="rule-actions">
-            <button class="btn btn-icon btn-toggle" data-index="${index}">
-              ${rule.enabled ? '🟢' : '⚪'}
-            </button>
-            <button class="btn btn-icon btn-edit" data-index="${index}">⚙️</button>
-            <button class="btn btn-icon btn-danger btn-delete" data-index="${index}">Delete</button>
+            <button class="btn btn-edit" data-index="${index}">Edit</button>
+            <button class="btn btn-danger btn-delete" data-index="${index}">Delete</button>
           </div>
         </div>
-        
-        ${rule.responseBody ? `
-        <div class="rule-detail-group">
-          <div class="rule-detail">
-            <strong>Custom Response:</strong> Yes
-          </div>
-        </div>
-        ` : ''}
       </div>
     </div>
   `).join('');
@@ -263,6 +263,28 @@ async function deleteRule(index) {
   const response = await sendMessage({ 
     action: 'deleteRule', 
     index 
+  });
+  
+  if (response.success) {
+    await loadRules();
+  }
+}
+
+// Clear all rules
+async function clearAllRules() {
+  const rulesResponse = await sendMessage({ action: 'getRules' });
+  const rulesCount = rulesResponse.rules?.length || 0;
+  
+  if (rulesCount === 0) {
+    return;
+  }
+  
+  if (!confirm(`Are you sure you want to delete all ${rulesCount} rule(s)?`)) {
+    return;
+  }
+  
+  const response = await sendMessage({ 
+    action: 'clearAllRules'
   });
   
   if (response.success) {

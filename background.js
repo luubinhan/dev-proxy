@@ -68,6 +68,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ success: false, error: 'Invalid index' });
       }
       break;
+    
+    case 'clearAllRules':
+      interceptRules = [];
+      chrome.storage.local.set({ interceptRules });
+      sendResponse({ success: true });
+      break;
   }
   return true; // Keep message channel open for async response
 });

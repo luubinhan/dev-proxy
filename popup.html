@@ -10,24 +10,23 @@
   <div class="container">
     <header>
       <h1>
-        <img src="icons/icon128.png" alt="DevProxy" style="width: 24px; height: 24px; vertical-align: middle; margin-right: 8px;">
+        <img src="icons/icon128.png" alt="DevProxy" style="width: 33px; height: 33px; vertical-align: middle; margin-right: 8px;">
         DevProxy
       </h1>
-      <div class="toggle-container">
-        <label class="switch">
-          <input type="checkbox" id="enableToggle">
-          <span class="slider"></span>
-        </label>
-        <span id="statusText">Disabled</span>
-      </div>
+      <div class="section-header">
+        <div class="toggle-container" style="margin-right: 8px;">
+          <label class="switch">
+            <input type="checkbox" id="enableToggle">
+            <span class="slider"></span>
+          </label>
+          <span id="statusText">Disabled</span>
+        </div>
+        <button id="clearAllBtn" class="btn btn-danger" style="margin-right: 8px;">Clear All</button>
+        <button id="addRuleBtn" class="btn btn-primary">+ Add Rule</button>
+      </div>      
     </header>
 
-    <div class="rules-section">
-      <div class="section-header">
-        <h2>Intercept Rules</h2>
-        <button id="addRuleBtn" class="btn btn-primary">+ Add Rule</button>
-      </div>
-      
+    <div class="rules-section">      
       <div id="rulesList" class="rules-list">
         <!-- Rules will be dynamically added here -->
       </div>

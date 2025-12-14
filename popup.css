@@ -1,3 +1,18 @@
+:root {
+  --dark-bg: #181A1E;
+  --blue-bg: #1F2633;
+  --blue-line: #373E4C;
+  --bg-tag: #30333D;
+  --green: #42AE51;
+  --light-green: #81E0AC;
+  --blue: #4661C3;
+  --light-blue: #718DE2;
+  --yellow: #D5821C;
+  --light-yellow: #FFB968;
+  --red: #D92339;
+  --light-red: #FF7B83;
+  --text-color: #CED6EE;
+}
 * {
   margin: 0;
   padding: 0;
@@ -8,27 +23,30 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   width: 600px;
   min-height: 600px;
-  background: #f5f5f5;
+  background: var(--dark-bg);
 }
 
 .container {
-  padding: 16px;
+  padding: 20px;
 }
 
 header {
-  background: white;
-  padding: 16px;
-  border-radius: 8px;
-  margin-bottom: 16px;
+  margin-bottom: 24px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
 h1 {
   font-size: 20px;
-  color: #333;
+  color: #fff;
+  font-weight: bold;
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center
 }
 
 .toggle-container {
@@ -39,7 +57,7 @@ h1 {
 
 #statusText {
   font-size: 14px;
-  color: #666;
+  color: #fff;
   font-weight: 500;
 }
 
@@ -90,36 +108,17 @@ input:checked + .slider:before {
 }
 
 /* Rules Section */
-.rules-section {
-  background: white;
-  padding: 16px;
-  border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-.section-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-h2 {
-  font-size: 16px;
-  color: #333;
-}
-
 .rules-list {
   max-height: 400px;
   overflow-y: auto;
 }
 
 .rule-item {
-  background: #f9f9f9;
-  padding: 12px;
-  border-radius: 6px;
-  margin-bottom: 8px;
-  border-left: 4px solid #4CAF50;
+  background: var(--blue-bg);
+  border: 1px solid var(--blue-line);
+  box-shadow: 0 4px 4px rgba(0, 0, 0, 0.25);
+  border-radius: 4px;
+  margin-bottom: 12px;
 }
 
 .rule-item.disabled {
@@ -128,18 +127,17 @@ h2 {
 }
 
 .rule-header {
+  padding: 8px;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: 8px;
-  margin-bottom: 8px;
+  border-bottom: 1px solid var(--dark-bg);
 }
 
 .rule-pattern {
-  font-family: 'Courier New', monospace;
   word-wrap: break-word;
-  font-size: 13px;
-  color: #333;
-  font-weight: 500;
+  font-size: 16px;
+  color: #fff;
 }
 
 .rule-actions {
@@ -149,11 +147,13 @@ h2 {
 }
 
 .rule-details {
-  font-size: 12px;
-  color: #666;
+  padding: 8px;
+  font-size: 14px;
+  color: var(--text-color);
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
+  border-top: 1px solid var(--blue-line);
 }
 
 .rule-detail {
@@ -164,19 +164,41 @@ h2 {
 
 .empty-state {
   text-align: center;
-  padding: 40px 20px;
+  min-height: 400px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   color: #999;
+  font-size: 16px;
+}
+
+.btn-toggle {
+  background: transparent;
+  border: none;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.tag {
+  background-color: var(--bg-tag);
+  border-radius: 7px;
+  padding: 6px 10px;
+  display: inline-block;
+  margin-left: 8px;
 }
 
 /* Buttons */
 .btn {
-  padding: 8px 16px;
+  padding: 8px 20px;
   border: none;
-  border-radius: 4px;
+  border-radius: 50rem;
   cursor: pointer;
   font-size: 14px;
   font-weight: 500;
   transition: background-color 0.2s;
+  background-color: #2F3747;
+  color: var(--text-color);
 }
 
 .btn-primary {
@@ -313,26 +335,23 @@ h2 {
 }
 
 .rule-status {
-    border-radius: 50rem;
-    padding: 2px 8px;
-    background-color: #ebf7eb;
-    border: 1px solid #3b833f;
-    color: #3e7a46;
+    border-radius: 7px;
+    padding: 6px 10px;
+    background-color: var(--green);
+    border: 1px solid var(--light-green);
+    color: #fff;
 
     &[data-color="3xx"] {
-      background-color: #eef0fb;
-      color: #7984c9;
-      border-color: #7984c9;
+      background-color: var(--yellow);
+      border-color: var(--light-yellow);
     }
     &[data-color="4xx"] {
-      background-color: #fdf2dc;
-      color: #ba731f;
-      border-color: #ba731f;
+      background-color: var(--blue);
+      border-color: var(--light-blue);
     }
     &[data-color="5xx"] {
-      background-color: #fdecf2;
-      color: #d93025;
-      border-color: #c33564;
+      background-color: var(--red);
+      border-color: var(--light-red);
     }
 }
 
@@ -342,4 +361,10 @@ h2 {
   justify-content: space-between;
   gap: 4px;
   width: 100%;
+}
+
+.btn-edit,
+.btn-delete {
+  padding: 4px 10px;
+  font-size: 12px;
 }
