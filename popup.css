@@ -187,7 +187,7 @@ input:checked + .slider:before {
   border-radius: 7px;
   padding: 6px 10px;
   display: inline-block;
-  margin-left: 8px;
+  margin-right: 12px;
 }
 
 /* Buttons */
