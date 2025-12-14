@@ -11,7 +11,7 @@ const rulesList = document.getElementById('rulesList');
 const ruleModal = document.getElementById('ruleModal');
 const modalTitle = document.getElementById('modalTitle');
 const ruleForm = document.getElementById('ruleForm');
-const cancelBtn = document.getElementById('cancelBtn');
+// const cancelBtn = document.getElementById('cancelBtn');
 const closeBtn = document.querySelector('.close');
 
 // Initialize popup
@@ -26,7 +26,7 @@ function setupEventListeners() {
   enableToggle.addEventListener('change', handleToggleChange);
   addRuleBtn.addEventListener('click', () => openModal());
   clearAllBtn.addEventListener('click', clearAllRules);
-  cancelBtn.addEventListener('click', closeModal);
+  // cancelBtn.addEventListener('click', closeModal);
   closeBtn.addEventListener('click', closeModal);
   ruleForm.addEventListener('submit', handleFormSubmit);
   
@@ -128,16 +128,14 @@ function displayRules(rules) {
             </div>
           ` : ''}
           ${rule.responseBody ? `
-          <div class="rule-detail-group">
-            <div class="rule-detail">
-              <span>Custom Response</span> <span class="tag">Yes</span>
-            </div>
+          <div class="rule-detail">
+            <span>Custom Response</span> <span class="tag">Yes</span>
           </div>
-          ` : ''}
-          <div class="rule-actions">
-            <button class="btn btn-edit" data-index="${index}">Edit</button>
-            <button class="btn btn-danger btn-delete" data-index="${index}">Delete</button>
-          </div>
+          ` : ''}          
+        </div>
+        <div class="rule-actions">
+          <button class="btn btn-edit" data-index="${index}">Edit</button>
+          <button class="btn btn-danger btn-delete" data-index="${index}">Delete</button>
         </div>
       </div>
     </div>

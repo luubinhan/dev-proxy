@@ -28,6 +28,9 @@ A powerful Chrome extension that allows you to intercept, modify, and delay netw
 2. Toggle the switch to "Enabled" to start intercepting requests
 3. Click "Add Rule" to create your first intercept rule
 
+![Main Screen](img/main-screen.png)
+![Add Rule Screen](img/add-rule-screen.png)
+
 ### Creating an Intercept Rule
 
 1. **URL Pattern**: Enter a regular expression to match URLs
