@@ -1,5 +1,4 @@
 // Network Intercept Background Service Worker
-
 let interceptRules = [];
 let attachedTabs = new Set();
 let isEnabled = false;
@@ -146,21 +145,36 @@ async function handleRequestPaused(tabId, params) {
   const { requestId, request } = params;
   const url = request.url;
 
+  // Skip preflight OPTIONS requests - let them pass through
+  if (request.method === 'OPTIONS') {
+    try {
+      await chrome.debugger.sendCommand(
+        { tabId },
+        'Fetch.continueRequest',
+        { requestId }
+      );
+    } catch (error) {
+      console.error('[DevProxy] Error continuing preflight:', error);
+    }
+    return;
+  }
+
   // Find matching rule
+  let testCount = 0;
   const matchingRule = interceptRules.find(rule => {
     if (!rule.enabled) return false;
     
+    testCount++;
     try {
       const urlPattern = new RegExp(rule.urlPattern);
       return urlPattern.test(url);
     } catch (error) {
-      console.error('Invalid URL pattern:', rule.urlPattern, error);
+      console.error('[DevProxy] Invalid pattern:', rule.urlPattern, error);
       return false;
     }
   });
 
   if (matchingRule) {
-    console.log(`Intercepting request: ${url}`);
     await applyRule(tabId, requestId, params, matchingRule);
   } else {
     // Continue without modification
@@ -171,7 +185,7 @@ async function handleRequestPaused(tabId, params) {
         { requestId }
       );
     } catch (error) {
-      console.error('Error continuing request:', error);
+      console.error('[DevProxy] Error continuing request:', error);
     }
   }
 }
@@ -184,9 +198,25 @@ async function applyRule(tabId, requestId, params, rule) {
       await new Promise(resolve => setTimeout(resolve, rule.delay));
     }
 
+    // Get origin from request headers for proper CORS handling
+    let origin = '*';
+    if (params.request.headers) {
+      // Headers can be an object or array depending on the event
+      if (Array.isArray(params.request.headers)) {
+        const originHeader = params.request.headers.find(h => h.name.toLowerCase() === 'origin');
+        origin = originHeader ? originHeader.value : '*';
+      } else {
+        // Headers as object
+        origin = params.request.headers['origin'] || params.request.headers['Origin'] || '*';
+      }
+    }
+
     // Prepare response override
     const responseHeaders = [
-      { name: 'Access-Control-Allow-Origin', value: '*' }
+      { name: 'Access-Control-Allow-Origin', value: origin },
+      { name: 'Access-Control-Allow-Credentials', value: 'true' },
+      { name: 'Access-Control-Allow-Methods', value: 'GET, POST, PUT, DELETE, PATCH, OPTIONS' },
+      { name: 'Access-Control-Allow-Headers', value: 'Content-Type, Authorization, X-Requested-With' }
     ];
 
     // Add custom headers from rule
@@ -223,10 +253,8 @@ async function applyRule(tabId, requestId, params, rule) {
         body: base64Body
       }
     );
-
-    console.log(`Request intercepted and modified: ${params.request.url}`);
   } catch (error) {
-    console.error('Error applying rule:', error);
+    console.error('[DevProxy] Error applying rule:', error);
     
     // Try to continue the request if modification fails
     try {
@@ -236,7 +264,7 @@ async function applyRule(tabId, requestId, params, rule) {
         { requestId }
       );
     } catch (continueError) {
-      console.error('Error continuing request after failure:', continueError);
+      console.error('[DevProxy] Error continuing request after failure:', continueError);
     }
   }
 }

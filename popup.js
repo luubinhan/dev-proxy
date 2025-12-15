@@ -185,11 +185,25 @@ function closeModal() {
 async function handleFormSubmit(e) {
   e.preventDefault();
   
-  const urlPattern = document.getElementById('urlPattern').value.trim();
+  let urlPattern = document.getElementById('urlPattern').value.trim();
   const statusCode = parseInt(document.getElementById('statusCode').value) || 200;
   const delay = parseInt(document.getElementById('delay').value) || 0;
   const responseBodyStr = document.getElementById('responseBody').value.trim();
   const responseHeadersStr = document.getElementById('responseHeaders').value.trim();
+  
+  // Auto-convert simple wildcard patterns to proper regex
+  // Check if it looks like a URL with wildcards but not already a regex
+  if (urlPattern.includes('*') && !urlPattern.includes('.*') && !urlPattern.includes('[') && !urlPattern.includes('(')) {
+    // Escape all special regex characters
+    let escapedPattern = urlPattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+    // Convert * to .*
+    escapedPattern = escapedPattern.replace(/\*/g, '.*');
+    
+    urlPattern = escapedPattern;
+    
+    // Update the input to show the converted pattern
+    document.getElementById('urlPattern').value = urlPattern;
+  }
   
   // Validate URL pattern
   try {
