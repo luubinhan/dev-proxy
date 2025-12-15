@@ -189,6 +189,13 @@ async function applyRule(tabId, requestId, params, rule) {
       { name: 'Access-Control-Allow-Origin', value: '*' }
     ];
 
+    // Add custom headers from rule
+    if (rule.responseHeaders && typeof rule.responseHeaders === 'object') {
+      for (const [name, value] of Object.entries(rule.responseHeaders)) {
+        responseHeaders.push({ name, value: String(value) });
+      }
+    }
+
     let responseCode = rule.statusCode || 200;
     let body = rule.responseBody || '';
 
@@ -197,7 +204,10 @@ async function applyRule(tabId, requestId, params, rule) {
     if (body) {
       if (typeof body === 'object') {
         body = JSON.stringify(body);
-        responseHeaders.push({ name: 'Content-Type', value: 'application/json' });
+        // Only add Content-Type if not already set by custom headers
+        if (!rule.responseHeaders || !rule.responseHeaders['Content-Type']) {
+          responseHeaders.push({ name: 'Content-Type', value: 'application/json' });
+        }
       }
       base64Body = btoa(unescape(encodeURIComponent(body)));
     }

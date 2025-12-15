@@ -133,6 +133,11 @@ function displayRules(rules) {
           <div class="rule-detail">
             <span>Custom Response</span> <span class="tag">Yes</span>
           </div>
+          ` : ''}
+          ${rule.responseHeaders ? `
+          <div class="rule-detail">
+            <span>Custom Headers</span> <span class="tag">Yes</span>
+          </div>
           ` : ''}          
         </div>
         <div class="rule-actions">
@@ -157,6 +162,10 @@ function openModal(rule = null, index = -1) {
       typeof rule.responseBody === 'object' 
         ? JSON.stringify(rule.responseBody, null, 2) 
         : (rule.responseBody || '');
+    document.getElementById('responseHeaders').value = 
+      rule.responseHeaders 
+        ? JSON.stringify(rule.responseHeaders, null, 2) 
+        : '';
   } else {
     modalTitle.textContent = 'Add Rule';
     ruleForm.reset();
@@ -180,6 +189,7 @@ async function handleFormSubmit(e) {
   const statusCode = parseInt(document.getElementById('statusCode').value) || 200;
   const delay = parseInt(document.getElementById('delay').value) || 0;
   const responseBodyStr = document.getElementById('responseBody').value.trim();
+  const responseHeadersStr = document.getElementById('responseHeaders').value.trim();
   
   // Validate URL pattern
   try {
@@ -199,11 +209,27 @@ async function handleFormSubmit(e) {
     }
   }
   
+  // Parse response headers
+  let responseHeaders = null;
+  if (responseHeadersStr) {
+    try {
+      responseHeaders = JSON.parse(responseHeadersStr);
+      if (typeof responseHeaders !== 'object' || Array.isArray(responseHeaders)) {
+        alert('Response headers must be a JSON object');
+        return;
+      }
+    } catch (error) {
+      alert('Invalid response headers JSON: ' + error.message);
+      return;
+    }
+  }
+  
   const rule = {
     urlPattern,
     statusCode,
     delay,
     responseBody,
+    responseHeaders,
     enabled: true
   };
   
