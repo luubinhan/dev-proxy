@@ -51,9 +51,11 @@ async function refreshDebuggerStatus() {
     });
 
     statusEl.hidden = false;
+    const urlHint = status.tabUrl ? ` [${status.tabUrl}]` : '';
     if (status.debuggerAttached) {
       statusEl.dataset.state = 'ok';
-      statusEl.textContent = status.attachMessage || 'Debugger attached — interception active on this tab';
+      statusEl.textContent =
+        (status.attachMessage || 'Debugger attached — interception active on this tab') + urlHint;
     } else if (status.attachReason === 'no_rules') {
       statusEl.dataset.state = 'ok';
       statusEl.textContent =

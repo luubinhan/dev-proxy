@@ -286,55 +286,104 @@ async function attachDebuggerToActiveTab() {
 }
 
 /**
- * Prefer a real http(s) page target for this tab.
- * Attaching by tabId can hit PDF viewer / other-extension guests and fail.
+ * @returns {object|null} attachResult on hard failure; null when caller should continue (already attached)
+ */
+function handleAttachFailure(tabId, tabUrl, message) {
+  if (isAlreadyAttached(message)) {
+    return null;
+  }
+
+  if (isExtensionUrlConflict(message)) {
+    forgetDebuggee(tabId);
+    clearReattach(tabId);
+    console.warn(`[DevProxy] Extension-page attach blocked for tab ${tabId}:`, message);
+    return attachResult({
+      tabId,
+      url: tabUrl,
+      reason: 'extension_page',
+      message:
+        `Chrome blocked debugger on this tab (${tabUrl || 'unknown'}). ` +
+        'If this is a normal website, close PDF viewer / embedded browser / other debugger extensions and retry. ' +
+        'If this is an extension options page, DevProxy cannot intercept it.'
+    });
+  }
+
+  if (isDevToolsConflict(message)) {
+    forgetDebuggee(tabId);
+    console.warn(`[DevProxy] Cannot attach to tab ${tabId}: DevTools/another debugger owns it.`);
+    scheduleReattach(tabId);
+    return attachResult({
+      tabId,
+      url: tabUrl,
+      reason: 'devtools_conflict',
+      message:
+        `DevTools (or another debugger) is attached to this tab (${tabUrl || 'unknown'}). ` +
+        'Close DevTools completely, then reopen this popup.'
+    });
+  }
+
+  console.error(`[DevProxy] Failed to attach debugger to tab ${tabId}:`, message);
+  scheduleReattach(tabId);
+  return attachResult({
+    tabId,
+    url: tabUrl,
+    reason: 'attach_failed',
+    message: `Attach failed on ${tabUrl || 'unknown'}: ${message}`
+  });
+}
+
+/**
+ * Resolve how to attach to a tab.
+ * Important: other extensions' content-script targets also share tabId and look like
+ * chrome-extension://… — that must NOT block attach when the tab URL itself is http(s).
  */
 async function resolveDebuggeeForTab(tabId, tabUrl) {
-  let targets = [];
+  // Tab address bar is the source of truth
+  if (isBlockedUrl(tabUrl)) {
+    return {
+      ok: false,
+      reason: 'extension_page',
+      url: tabUrl,
+      message:
+        `This tab is not a normal website (${tabUrl || 'unknown'}). ` +
+        'Focus your https:// app tab, then reopen DevProxy.'
+    };
+  }
+
+  if (!isAttachableUrl(tabUrl)) {
+    return {
+      ok: false,
+      reason: 'unsupported_url',
+      url: tabUrl,
+      message: `Cannot attach to this page (${tabUrl || 'unknown'}). Open your http(s) app tab and retry.`
+    };
+  }
+
+  // Prefer the http(s) page target when CDP exposes it; otherwise attach by tabId
   try {
-    targets = await chrome.debugger.getTargets();
+    const targets = await chrome.debugger.getTargets();
+    const httpPage = targets.find(
+      (t) =>
+        t.tabId === tabId &&
+        t.type === 'page' &&
+        isAttachableUrl(t.url) &&
+        !isBlockedUrl(t.url)
+    );
+    if (httpPage) {
+      return {
+        ok: true,
+        debuggee: { targetId: httpPage.id },
+        url: httpPage.url
+      };
+    }
   } catch (error) {
     console.warn('[DevProxy] getTargets failed:', error);
   }
 
-  const related = targets.filter((t) => t.tabId === tabId);
-  const httpPage = related.find(
-    (t) => t.type === 'page' && isAttachableUrl(t.url) && !isBlockedUrl(t.url)
-  );
-
-  if (httpPage) {
-    return {
-      ok: true,
-      debuggee: { targetId: httpPage.id },
-      url: httpPage.url
-    };
-  }
-
-  const blocked = related.find((t) => isBlockedUrl(t.url) || String(t.url || '').startsWith('chrome-extension://'));
-  if (blocked || isBlockedUrl(tabUrl)) {
-    return {
-      ok: false,
-      reason: 'extension_page',
-      url: blocked?.url || tabUrl,
-      message:
-        'This tab is an extension/PDF/special page. Chrome blocks debugger attach there. ' +
-        'Click your normal website tab (https://...), then reopen DevProxy.'
-    };
-  }
-
-  if (isAttachableUrl(tabUrl)) {
-    return {
-      ok: true,
-      debuggee: { tabId },
-      url: tabUrl
-    };
-  }
-
   return {
-    ok: false,
-    reason: 'unsupported_url',
-    url: tabUrl,
-    message: `Cannot attach to this page (${tabUrl || 'unknown'}). Open your http(s) app tab and retry.`
+    ok: true,
+    debuggee: { tabId },
+    url: tabUrl
   };
 }
 
@@ -404,51 +453,37 @@ async function attachDebugger(tabId, options = {}) {
     });
   }
 
-  const debuggee = resolved.debuggee;
+  let debuggee = resolved.debuggee;
   tabUrl = resolved.url || tabUrl;
 
   try {
     await chrome.debugger.attach(debuggee, '1.3');
   } catch (error) {
     const message = error?.message || String(error);
-    if (isExtensionUrlConflict(message)) {
-      forgetDebuggee(tabId);
-      clearReattach(tabId);
-      console.warn(`[DevProxy] Extension-page attach blocked for tab ${tabId}:`, message);
-      return attachResult({
-        tabId,
-        url: tabUrl,
-        reason: 'extension_page',
-        message:
-          'Chrome blocked attach: this tab is backed by another extension (options page, PDF viewer, embedded browser, etc.). ' +
-          'Switch to a normal https:// website tab that calls the API, then reopen DevProxy.'
-      });
+
+    // targetId attach can fail when CDP points at a guest view; retry plain tabId for real https tabs
+    if (
+      isExtensionUrlConflict(message) &&
+      debuggee.targetId &&
+      isAttachableUrl(tabUrl) &&
+      !isBlockedUrl(tabUrl)
+    ) {
+      console.warn(`[DevProxy] targetId attach blocked, retrying with tabId for ${tabUrl}`);
+      debuggee = { tabId };
+      try {
+        await chrome.debugger.attach(debuggee, '1.3');
+      } catch (retryError) {
+        const retryMessage = retryError?.message || String(retryError);
+        const failure = handleAttachFailure(tabId, tabUrl, retryMessage);
+        if (failure) return failure;
+        console.log(`[DevProxy] Debugger already attached to tab ${tabId}, re-enabling Fetch`);
+      }
+    } else {
+      const failure = handleAttachFailure(tabId, tabUrl, message);
+      if (failure) return failure;
+      // already attached → fall through to Fetch.enable
+      console.log(`[DevProxy] Debugger already attached to tab ${tabId}, re-enabling Fetch`);
     }
-    if (isDevToolsConflict(message)) {
-      forgetDebuggee(tabId);
-      console.warn(
-        `[DevProxy] Cannot attach to tab ${tabId}: DevTools/another debugger owns it.`
-      );
-      scheduleReattach(tabId);
-      return attachResult({
-        tabId,
-        url: tabUrl,
-        reason: 'devtools_conflict',
-        message:
-          'DevTools (or another debugger) is attached to this tab. Close DevTools completely, then reopen this popup.'
-      });
-    }
-    if (!isAlreadyAttached(message)) {
-      console.error(`[DevProxy] Failed to attach debugger to tab ${tabId}:`, error);
-      scheduleReattach(tabId);
-      return attachResult({
-        tabId,
-        url: tabUrl,
-        reason: 'attach_failed',
-        message: `Attach failed: ${message}`
-      });
-    }
-    console.log(`[DevProxy] Debugger already attached to tab ${tabId}, re-enabling Fetch`);
   }
 
   try {
