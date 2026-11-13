@@ -1,13 +1,11 @@
 {
   "manifest_version": 3,
   "name": "DevProxy",
-  "version": "1.0.0",
-  "description": "Intercept, modify, and delay network requests",
+  "version": "1.1.0",
+  "description": "Intercept, modify, and delay fetch/XHR requests on web pages",
   "permissions": [
-    "debugger",
     "storage",
-    "tabs",
-    "activeTab"
+    "tabs"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -15,6 +13,21 @@
   "background": {
     "service_worker": "background.js"
   },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["page-intercept.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content-bridge.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {

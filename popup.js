@@ -15,57 +15,23 @@ const closeBtn = document.querySelector('.close');
 // Initialize popup
 async function init() {
   setupEventListeners();
-  await refreshDebuggerStatus();
+  await refreshStatus();
   await loadRules();
 }
 
-function isHttpTab(tab) {
-  const url = tab?.url || tab?.pendingUrl || '';
-  return url.startsWith('http://') || url.startsWith('https://');
-}
-
-async function getActivePageTab() {
-  // Resolve from popup context — more reliable than service worker currentWindow
-  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (active && isHttpTab(active)) return active;
-
-  // If user is on chrome:// or another extension page, prefer another http(s) tab in this window
-  if (active?.windowId != null) {
-    const tabs = await chrome.tabs.query({ windowId: active.windowId });
-    const httpTab = tabs.find(isHttpTab);
-    if (httpTab) return httpTab;
-  }
-
-  return active || null;
-}
-
-async function refreshDebuggerStatus() {
+async function refreshStatus() {
   const statusEl = document.getElementById('debuggerStatus');
   if (!statusEl) return;
 
   try {
-    const tab = await getActivePageTab();
-    const status = await sendMessage({
-      action: 'getStatus',
-      tabId: tab?.id
-    });
-
+    const status = await sendMessage({ action: 'getStatus' });
     statusEl.hidden = false;
-    const urlHint = status.tabUrl ? ` [${status.tabUrl}]` : '';
-    if (status.debuggerAttached) {
-      statusEl.dataset.state = 'ok';
-      statusEl.textContent =
-        (status.attachMessage || 'Debugger attached — interception active on this tab') + urlHint;
-    } else if (status.attachReason === 'no_rules') {
-      statusEl.dataset.state = 'ok';
-      statusEl.textContent =
-        status.attachMessage || 'Interception off — add a rule to enable the debugger';
-    } else {
-      statusEl.dataset.state = 'warn';
-      statusEl.textContent =
-        status.attachMessage ||
-        'Debugger NOT attached. Focus your app tab (http/https), close DevTools, then reopen this popup.';
-    }
+    statusEl.dataset.state = 'ok';
+    statusEl.textContent =
+      status.message ||
+      (status.isEnabled
+        ? 'Page intercept ready (fetch/XHR) — hard-refresh the tab after reload'
+        : 'Interception off — add an enabled rule');
   } catch (error) {
     statusEl.hidden = false;
     statusEl.dataset.state = 'warn';
@@ -107,8 +73,7 @@ function setupEventListeners() {
 
 // Load rules
 async function loadRules() {
-  const tab = await getActivePageTab();
-  const response = await sendMessage({ action: 'getRules', tabId: tab?.id });
+  const response = await sendMessage({ action: 'getRules' });
   displayRules(response.rules);
 }
 
@@ -271,26 +236,23 @@ async function handleFormSubmit(e) {
   };
   
   try {
-    const tab = await getActivePageTab();
     let response;
     if (currentEditIndex >= 0) {
       response = await sendMessage({
         action: 'updateRule',
         index: currentEditIndex,
-        rule,
-        tabId: tab?.id
+        rule
       });
     } else {
       response = await sendMessage({
         action: 'addRule',
-        rule,
-        tabId: tab?.id
+        rule
       });
     }
 
     if (response.success) {
       closeModal();
-      await refreshDebuggerStatus();
+      await refreshStatus();
       await loadRules();
     } else {
       alert('Failed to save rule: ' + (response.error || 'Unknown error'));
@@ -309,6 +271,7 @@ async function toggleRule(index) {
   });
   
   if (response.success) {
+    await refreshStatus();
     await loadRules();
   }
 }
@@ -333,6 +296,7 @@ async function deleteRule(index) {
   });
   
   if (response.success) {
+    await refreshStatus();
     await loadRules();
   }
 }
@@ -355,6 +319,7 @@ async function clearAllRules() {
   });
   
   if (response.success) {
+    await refreshStatus();
     await loadRules();
   }
 }

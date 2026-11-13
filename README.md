@@ -1,179 +1,83 @@
-# Network Intercept Chrome Extension
+# DevProxy — Network Intercept Chrome Extension
 
-A powerful Chrome extension that allows you to intercept, modify, and delay network requests in real-time.
+Intercept, mock, and delay **fetch / XHR** requests on normal `http(s)` pages.
 
 ## Features
 
-- **URL Pattern Matching**: Use regular expressions to target specific requests
-- **Response Modification**: Change response body, status codes, and headers
-- **Request Delay**: Add artificial delays to simulate slow network conditions
+- **URL Pattern Matching**: Regular expressions against the full request URL
+- **Response Modification**: Custom status, body, and headers
+- **Request Delay**: Artificial latency (capped at 30s)
 - **Rule Management**: Enable/disable rules individually
-- **Easy-to-Use Interface**: Simple popup UI for managing intercept rules
+- **No Chrome debugger**: Works with DevTools open; does not freeze page loads
 
 ## Installation
 
-### From Source
+1. Open `chrome://extensions/`
+2. Enable **Developer mode**
+3. **Load unpacked** → select this repository folder
+4. Pin DevProxy from the toolbar
 
-1. Clone this repository or download the source code
-2. Open Chrome and navigate to `chrome://extensions/`
-3. Enable "Developer mode" in the top right corner
-4. Click "Load unpacked" and select the extension directory
-5. The extension icon should appear in your Chrome toolbar
+After upgrading, click **Reload** on the extension card, then **hard-refresh** your app tab.
 
 ## Usage
 
-### Getting Started
+1. Open your app tab (`https://...`)
+2. Click DevProxy → **Add Rule**
+3. Example for IAM register mock:
+   - **URL Pattern**: `/middleware/iam/v2/register` (auto-normalized) or `.*middleware/iam/v2/register.*`
+   - **Status Code**: `500`
+   - **Response Body** (optional): `{"error":"mocked"}`
+4. Hard-refresh the page once so content scripts load
+5. Trigger the API — page console should log `[DevProxy] MATCH fetch|xhr ...`
 
-1. Click the extension icon in the Chrome toolbar
-2. Click "Add Rule" to create your first intercept rule (interception is always on)
-
-![Main Screen](img/main-screen.png)
-![Add Rule Screen](img/add-rule-screen.png)
-
-### Creating an Intercept Rule
-
-1. **URL Pattern**: Enter a regular expression to match URLs
-   - Example: `.*api\.example\.com.*` matches any URL containing "api.example.com"
-   - Example: `.*\.json$` matches all requests ending with ".json"
-
-2. **Status Code**: Set the HTTP status code (200, 404, 500, etc.)
-
-3. **Delay (ms)**: Add a delay in milliseconds before the response is returned
-
-4. **Response Body**: Provide custom response data
-   - Can be JSON: `{"message": "Custom response"}`
-   - Or plain text: `Hello World`
-
-5. **Custom Headers**: Add or override response headers (JSON format)
-   ```json
-   {
-     "Content-Type": "application/json",
-     "X-Custom-Header": "value"
-   }
-   ```
-
-### Managing Rules
-
-- **Enable/Disable**: Click the checkmark button to toggle a rule on/off
-- **Edit**: Modify existing rules by clicking the "Edit" button
-- **Delete**: Remove rules with the "Delete" button
-
-## Examples
-
-### Example 1: Mock API Response
-
-**URL Pattern**: `.*api\.example\.com/users.*`  
-**Status Code**: 200  
-**Response Body**:
-```json
-{
-  "users": [
-    {"id": 1, "name": "John Doe"},
-    {"id": 2, "name": "Jane Smith"}
-  ]
-}
-```
-
-### Example 2: Simulate Slow Network
-
-**URL Pattern**: `.*\.jpg$`  
-**Delay**: 3000  
-**Status Code**: 200  
-(Leave response body empty to use original)
-
-### Example 3: Return Error
-
-**URL Pattern**: `.*api\.example\.com/error.*`  
-**Status Code**: 500  
-**Response Body**:
-```json
-{"error": "Internal Server Error"}
-```
+Popup status shows **Page intercept ready** when at least one rule is enabled.
 
 ## How It Works
 
-This extension uses Chrome's Debugger API to intercept network requests at a low level:
-
-1. When enabled, the extension attaches the Chrome Debugger to the active tab
-2. The `Fetch` domain is enabled to intercept all network requests
-3. Each request is checked against your defined rules
-4. Matching requests are fulfilled with your custom response
-5. Non-matching requests continue normally
+1. A **MAIN-world** content script patches `window.fetch` and `XMLHttpRequest` at `document_start`
+2. An isolated bridge pushes `interceptRules` from `chrome.storage` into the page via `postMessage`
+3. Matching calls return a mocked `Response` / XHR result without hitting the network
+4. Non-matching calls use the original implementations
 
 ## Permissions
 
-- **debugger**: Required to intercept and modify network requests
-- **storage**: To save your intercept rules
-- **tabs**: To access information about browser tabs
-- **activeTab**: To interact with the currently active tab
-- **host_permissions**: To intercept requests from all URLs
+- **storage**: Save rules
+- **tabs**: Popup helpers
+- **host_permissions (`<all_urls>`)**: Run content scripts on http(s) pages
 
 ## Limitations
 
-- Only works on tabs where the debugger can be attached
-- Cannot intercept requests from Chrome's built-in pages (chrome://)
-- Only one debugger can be attached to a tab at a time
-- When enabled, the tab will show "Debugger attached" notification
-
-## Development
-
-### Project Structure
-
-```
-network-intercept/
-├── manifest.json       # Extension configuration
-├── background.js       # Service worker for request interception
-├── popup.html          # Popup UI structure
-├── popup.css           # Popup styles
-├── popup.js            # Popup logic
-├── icons/              # Extension icons
-└── README.md           # Documentation
-```
-
-### Key Technologies
-
-- Chrome Extension Manifest V3
-- Chrome Debugger API
-- Fetch Domain API
-- Vanilla JavaScript (no frameworks)
+- Only **fetch** and **XHR** from the page (and same-origin frames) are intercepted
+- Requests from the site’s **service worker** are not patched
+- Document / CSS / image loads are never intercepted
+- After installing or reloading the extension, **hard-refresh** open tabs
 
 ## Troubleshooting
 
-**Extension not intercepting requests?**
-- Close DevTools on the page tab (only one debugger can attach). Reopen the DevProxy popup and confirm it says “Debugger attached”
-- Use a path/regex that matches the full request URL (e.g. `/middleware/iam/v2/register` or `.*register.*`)
-- Ensure the rule is enabled (green indicator)
-- Inspect the extension service worker console for `[DevProxy] MATCH` / `Fulfilled`
-- Only **XHR/Fetch** API calls are intercepted (page HTML/JS/CSS are never paused)
+**Rule not applying?**
+- Hard-refresh the app tab after reloading the extension
+- Confirm popup shows an enabled rule
+- In the page DevTools console, look for `[DevProxy] Page intercept ready` and `[DevProxy] MATCH ...`
+- Test the URL pattern against the full request URL (regex)
 
-**Page hangs / won’t load while extension is on?**
-- Reload the extension at `chrome://extensions`, then hard-refresh the tab
-- Close DevTools on that tab so DevProxy can attach cleanly
-- Avoid rules with very large Delay values
+**Still seeing a real 200?**
+- Pattern may not match (copy full URL from Network and tune regex)
+- Call may come from a service worker (not supported)
+- Rule may be disabled (grey indicator)
 
-**"Debugger attached" notification won't go away?**
-- This is expected behavior when the extension is enabled
-- Disable the extension to remove the notification
+## Project Structure
 
-**Changes not taking effect?**
-- Try reloading the page after adding/modifying rules
-- Check the browser console for error messages
-
-## Privacy & Security
-
-- This extension runs locally in your browser
-- No data is sent to external servers
-- Rules are stored locally using Chrome's storage API
-- Only intercepts requests when explicitly enabled
+```
+dev-proxy/
+├── manifest.json        # MV3 config (content_scripts, no debugger)
+├── background.js        # Rule CRUD + storage
+├── page-intercept.js    # MAIN-world fetch/XHR patch
+├── content-bridge.js    # Pushes rules into the page
+├── popup.html / .js / .css
+├── icons/
+└── README.md
+```
 
 ## License
 
-MIT License - Feel free to modify and distribute as needed.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit issues and pull requests.
-
-## Support
-
-For issues, questions, or suggestions, please open an issue on the GitHub repository.
+MIT
