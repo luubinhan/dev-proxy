@@ -3,112 +3,190 @@ let interceptRules = [];
 let attachedTabs = new Set();
 let isEnabled = false;
 
-// Load rules from storage on startup
-chrome.storage.local.get(['interceptRules', 'isEnabled'], (result) => {
+// MV3 workers are killed/restarted; always wait for storage before handling events
+const stateReady = chrome.storage.local.get(['interceptRules', 'isEnabled']).then((result) => {
   interceptRules = result.interceptRules || [];
   isEnabled = result.isEnabled || false;
 });
 
+async function ensureState() {
+  await stateReady;
+}
+
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  switch (message.action) {
-    case 'getStatus':
-      sendResponse({ isEnabled, attachedTabs: Array.from(attachedTabs) });
-      break;
-    
-    case 'toggleIntercept':
-      isEnabled = message.enabled;
-      chrome.storage.local.set({ isEnabled });
-      
-      if (isEnabled) {
-        attachDebuggerToActiveTab();
-      } else {
-        detachAllDebuggers();
-      }
-      sendResponse({ success: true });
-      break;
-    
-    case 'getRules':
-      sendResponse({ rules: interceptRules });
-      break;
-    
-    case 'addRule':
-      interceptRules.push(message.rule);
-      chrome.storage.local.set({ interceptRules });
-      sendResponse({ success: true });
-      break;
-    
-    case 'updateRule':
-      if (message.index >= 0 && message.index < interceptRules.length) {
-        interceptRules[message.index] = message.rule;
-        chrome.storage.local.set({ interceptRules });
+  (async () => {
+    await ensureState();
+
+    switch (message.action) {
+      case 'getStatus':
+        sendResponse({ isEnabled, attachedTabs: Array.from(attachedTabs) });
+        break;
+
+      case 'toggleIntercept':
+        isEnabled = message.enabled;
+        await chrome.storage.local.set({ isEnabled });
+
+        if (isEnabled) {
+          await attachDebuggerToActiveTab();
+        } else {
+          await detachAllDebuggers();
+        }
         sendResponse({ success: true });
-      } else {
-        sendResponse({ success: false, error: 'Invalid index' });
-      }
-      break;
-    
-    case 'deleteRule':
-      if (message.index >= 0 && message.index < interceptRules.length) {
-        interceptRules.splice(message.index, 1);
-        chrome.storage.local.set({ interceptRules });
+        break;
+
+      case 'getRules':
+        sendResponse({ rules: interceptRules });
+        break;
+
+      case 'addRule':
+        interceptRules.push(message.rule);
+        await chrome.storage.local.set({ interceptRules });
         sendResponse({ success: true });
-      } else {
-        sendResponse({ success: false, error: 'Invalid index' });
-      }
-      break;
-    
-    case 'toggleRule':
-      if (message.index >= 0 && message.index < interceptRules.length) {
-        interceptRules[message.index].enabled = !interceptRules[message.index].enabled;
-        chrome.storage.local.set({ interceptRules });
+        break;
+
+      case 'updateRule':
+        if (message.index >= 0 && message.index < interceptRules.length) {
+          interceptRules[message.index] = message.rule;
+          await chrome.storage.local.set({ interceptRules });
+          sendResponse({ success: true });
+        } else {
+          sendResponse({ success: false, error: 'Invalid index' });
+        }
+        break;
+
+      case 'deleteRule':
+        if (message.index >= 0 && message.index < interceptRules.length) {
+          interceptRules.splice(message.index, 1);
+          await chrome.storage.local.set({ interceptRules });
+          sendResponse({ success: true });
+        } else {
+          sendResponse({ success: false, error: 'Invalid index' });
+        }
+        break;
+
+      case 'toggleRule':
+        if (message.index >= 0 && message.index < interceptRules.length) {
+          interceptRules[message.index].enabled = !interceptRules[message.index].enabled;
+          await chrome.storage.local.set({ interceptRules });
+          sendResponse({ success: true });
+        } else {
+          sendResponse({ success: false, error: 'Invalid index' });
+        }
+        break;
+
+      case 'clearAllRules':
+        interceptRules = [];
+        await chrome.storage.local.set({ interceptRules });
         sendResponse({ success: true });
-      } else {
-        sendResponse({ success: false, error: 'Invalid index' });
-      }
-      break;
-    
-    case 'clearAllRules':
-      interceptRules = [];
-      chrome.storage.local.set({ interceptRules });
-      sendResponse({ success: true });
-      break;
-  }
+        break;
+
+      default:
+        sendResponse({ success: false, error: 'Unknown action' });
+    }
+  })().catch((error) => {
+    console.error('[DevProxy] Message handler error:', error);
+    sendResponse({ success: false, error: String(error) });
+  });
+
   return true; // Keep message channel open for async response
+});
+
+// Re-attach after service worker restart if intercept was left enabled
+stateReady.then(async () => {
+  if (isEnabled) {
+    console.log('[DevProxy] Restored enabled state, re-attaching debugger');
+    await attachDebuggerToActiveTab();
+  }
+});
+
+// Attach when user switches tabs while intercept is on
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  await ensureState();
+  if (!isEnabled) return;
+  try {
+    await attachDebugger(activeInfo.tabId);
+  } catch (error) {
+    console.error('[DevProxy] Error attaching on tab activate:', error);
+  }
+});
+
+// Attach on navigation in an already-watched workflow
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+  await ensureState();
+  if (!isEnabled || changeInfo.status !== 'loading') return;
+  try {
+    await attachDebugger(tabId);
+  } catch (error) {
+    console.error('[DevProxy] Error attaching on tab update:', error);
+  }
 });
 
 // Attach debugger to active tab
 async function attachDebuggerToActiveTab() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab && tab.id) {
+    if (tab && tab.id && isAttachableUrl(tab.url)) {
       await attachDebugger(tab.id);
     }
   } catch (error) {
-    console.error('Error attaching debugger:', error);
+    console.error('[DevProxy] Error attaching debugger:', error);
   }
+}
+
+function isAttachableUrl(url) {
+  if (!url) return false;
+  return url.startsWith('http://') || url.startsWith('https://') || url.startsWith('file://');
 }
 
 // Attach debugger to specific tab
 async function attachDebugger(tabId) {
   if (attachedTabs.has(tabId)) {
-    return; // Already attached
+    return; // Already tracked in this worker
+  }
+
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (!isAttachableUrl(tab.url)) {
+      console.log(`[DevProxy] Skipping non-attachable tab ${tabId}: ${tab.url}`);
+      return;
+    }
+  } catch (error) {
+    console.error(`[DevProxy] Could not get tab ${tabId}:`, error);
+    return;
   }
 
   try {
     await chrome.debugger.attach({ tabId }, '1.3');
+  } catch (error) {
+    const message = error?.message || String(error);
+    // After SW restart, debugger may still be attached from the previous worker
+    if (!message.includes('Already attached')) {
+      console.error(`[DevProxy] Failed to attach debugger to tab ${tabId}:`, error);
+      return;
+    }
+    console.log(`[DevProxy] Debugger already attached to tab ${tabId}, re-enabling Fetch`);
+  }
+
+  try {
     attachedTabs.add(tabId);
-    
-    // Enable network tracking
+
     await chrome.debugger.sendCommand({ tabId }, 'Network.enable');
     await chrome.debugger.sendCommand({ tabId }, 'Fetch.enable', {
-      patterns: [{ urlPattern: '*' }]
+      patterns: [
+        { urlPattern: '*', requestStage: 'Request' }
+      ]
     });
-    
-    console.log(`Debugger attached to tab ${tabId}`);
+
+    console.log(`[DevProxy] Debugger ready on tab ${tabId}`);
   } catch (error) {
-    console.error(`Failed to attach debugger to tab ${tabId}:`, error);
+    console.error(`[DevProxy] Failed to enable Fetch on tab ${tabId}:`, error);
     attachedTabs.delete(tabId);
+    try {
+      await chrome.debugger.detach({ tabId });
+    } catch (_) {
+      // ignore
+    }
   }
 }
 
@@ -117,9 +195,9 @@ async function detachAllDebuggers() {
   for (const tabId of attachedTabs) {
     try {
       await chrome.debugger.detach({ tabId });
-      console.log(`Debugger detached from tab ${tabId}`);
+      console.log(`[DevProxy] Debugger detached from tab ${tabId}`);
     } catch (error) {
-      console.error(`Failed to detach debugger from tab ${tabId}:`, error);
+      console.error(`[DevProxy] Failed to detach debugger from tab ${tabId}:`, error);
     }
   }
   attachedTabs.clear();
@@ -127,44 +205,57 @@ async function detachAllDebuggers() {
 
 // Handle debugger events
 chrome.debugger.onEvent.addListener((source, method, params) => {
-  if (!isEnabled) return;
+  if (method !== 'Fetch.requestPaused') return;
 
-  if (method === 'Fetch.requestPaused') {
-    handleRequestPaused(source.tabId, params);
-  }
+  handleRequestPaused(source.tabId, params).catch((error) => {
+    console.error('[DevProxy] Unhandled requestPaused error:', error);
+  });
 });
 
 // Handle debugger detach
 chrome.debugger.onDetach.addListener((source, reason) => {
   attachedTabs.delete(source.tabId);
-  console.log(`Debugger detached from tab ${source.tabId}. Reason: ${reason}`);
+  console.log(`[DevProxy] Debugger detached from tab ${source.tabId}. Reason: ${reason}`);
 });
+
+async function continueRequest(tabId, requestId) {
+  await chrome.debugger.sendCommand(
+    { tabId },
+    'Fetch.continueRequest',
+    { requestId }
+  );
+}
 
 // Handle request interception
 async function handleRequestPaused(tabId, params) {
   const { requestId, request } = params;
   const url = request.url;
 
+  await ensureState();
+
+  // If intercept was turned off (or state not ready previously), never leave the request hanging
+  if (!isEnabled) {
+    try {
+      await continueRequest(tabId, requestId);
+    } catch (error) {
+      console.error('[DevProxy] Error continuing request while disabled:', error);
+    }
+    return;
+  }
+
   // Skip preflight OPTIONS requests - let them pass through
   if (request.method === 'OPTIONS') {
     try {
-      await chrome.debugger.sendCommand(
-        { tabId },
-        'Fetch.continueRequest',
-        { requestId }
-      );
+      await continueRequest(tabId, requestId);
     } catch (error) {
       console.error('[DevProxy] Error continuing preflight:', error);
     }
     return;
   }
 
-  // Find matching rule
-  let testCount = 0;
   const matchingRule = interceptRules.find(rule => {
     if (!rule.enabled) return false;
-    
-    testCount++;
+
     try {
       const urlPattern = new RegExp(rule.urlPattern);
       return urlPattern.test(url);
@@ -175,19 +266,22 @@ async function handleRequestPaused(tabId, params) {
   });
 
   if (matchingRule) {
+    console.log('[DevProxy] MATCH', request.method, url, '→', matchingRule.urlPattern);
     await applyRule(tabId, requestId, params, matchingRule);
   } else {
-    // Continue without modification
     try {
-      await chrome.debugger.sendCommand(
-        { tabId },
-        'Fetch.continueRequest',
-        { requestId }
-      );
+      await continueRequest(tabId, requestId);
     } catch (error) {
       console.error('[DevProxy] Error continuing request:', error);
     }
   }
+}
+
+function shouldFulfill(rule) {
+  const hasBody = rule.responseBody !== undefined && rule.responseBody !== null && rule.responseBody !== '';
+  const hasHeaders = rule.responseHeaders && Object.keys(rule.responseHeaders).length > 0;
+  const hasCustomStatus = rule.statusCode !== undefined && rule.statusCode !== null && Number(rule.statusCode) !== 200;
+  return hasBody || hasHeaders || hasCustomStatus;
 }
 
 // Apply interception rule
@@ -198,26 +292,35 @@ async function applyRule(tabId, requestId, params, rule) {
       await new Promise(resolve => setTimeout(resolve, rule.delay));
     }
 
+    // Delay-only / passthrough rules: continue to network after waiting
+    if (!shouldFulfill(rule)) {
+      await continueRequest(tabId, requestId);
+      return;
+    }
+
     // Get origin from request headers for proper CORS handling
-    let origin = '*';
+    let origin = null;
     if (params.request.headers) {
-      // Headers can be an object or array depending on the event
       if (Array.isArray(params.request.headers)) {
         const originHeader = params.request.headers.find(h => h.name.toLowerCase() === 'origin');
-        origin = originHeader ? originHeader.value : '*';
+        origin = originHeader ? originHeader.value : null;
       } else {
-        // Headers as object
-        origin = params.request.headers['origin'] || params.request.headers['Origin'] || '*';
+        origin = params.request.headers['origin'] || params.request.headers['Origin'] || null;
       }
     }
 
-    // Prepare response override
     const responseHeaders = [
-      { name: 'Access-Control-Allow-Origin', value: origin },
-      { name: 'Access-Control-Allow-Credentials', value: 'true' },
       { name: 'Access-Control-Allow-Methods', value: 'GET, POST, PUT, DELETE, PATCH, OPTIONS' },
       { name: 'Access-Control-Allow-Headers', value: 'Content-Type, Authorization, X-Requested-With' }
     ];
+
+    // ACAO:* cannot be combined with credentials
+    if (origin) {
+      responseHeaders.push({ name: 'Access-Control-Allow-Origin', value: origin });
+      responseHeaders.push({ name: 'Access-Control-Allow-Credentials', value: 'true' });
+    } else {
+      responseHeaders.push({ name: 'Access-Control-Allow-Origin', value: '*' });
+    }
 
     // Add custom headers from rule
     if (rule.responseHeaders && typeof rule.responseHeaders === 'object') {
@@ -227,22 +330,26 @@ async function applyRule(tabId, requestId, params, rule) {
     }
 
     let responseCode = rule.statusCode || 200;
-    let body = rule.responseBody || '';
+    let body = rule.responseBody ?? '';
 
     // Convert body to base64 if needed
     let base64Body = '';
-    if (body) {
+    if (body !== '') {
       if (typeof body === 'object') {
         body = JSON.stringify(body);
-        // Only add Content-Type if not already set by custom headers
         if (!rule.responseHeaders || !rule.responseHeaders['Content-Type']) {
           responseHeaders.push({ name: 'Content-Type', value: 'application/json' });
         }
+      } else if (
+        typeof body === 'string' &&
+        !rule.responseHeaders?.['Content-Type'] &&
+        /^\s*[\{\[]/.test(body)
+      ) {
+        responseHeaders.push({ name: 'Content-Type', value: 'application/json' });
       }
       base64Body = btoa(unescape(encodeURIComponent(body)));
     }
 
-    // Fulfill request with modified response
     await chrome.debugger.sendCommand(
       { tabId },
       'Fetch.fulfillRequest',
@@ -253,16 +360,13 @@ async function applyRule(tabId, requestId, params, rule) {
         body: base64Body
       }
     );
+
+    console.log('[DevProxy] Fulfilled', requestId, 'with status', responseCode);
   } catch (error) {
     console.error('[DevProxy] Error applying rule:', error);
-    
-    // Try to continue the request if modification fails
+
     try {
-      await chrome.debugger.sendCommand(
-        { tabId },
-        'Fetch.continueRequest',
-        { requestId }
-      );
+      await continueRequest(tabId, requestId);
     } catch (continueError) {
       console.error('[DevProxy] Error continuing request after failure:', continueError);
     }
@@ -272,11 +376,11 @@ async function applyRule(tabId, requestId, params, rule) {
 // Clean up when tab is closed
 chrome.tabs.onRemoved.addListener((tabId) => {
   attachedTabs.delete(tabId);
-  
+
   // Auto-disable extension when all tabs are closed
   if (attachedTabs.size === 0 && isEnabled) {
     isEnabled = false;
     chrome.storage.local.set({ isEnabled });
-    console.log('Extension auto-disabled: all tabs closed');
+    console.log('[DevProxy] Extension auto-disabled: all attached tabs closed');
   }
 });

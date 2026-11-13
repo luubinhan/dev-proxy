@@ -25,8 +25,7 @@ A powerful Chrome extension that allows you to intercept, modify, and delay netw
 ### Getting Started
 
 1. Click the extension icon in the Chrome toolbar
-2. Toggle the switch to "Enabled" to start intercepting requests
-3. Click "Add Rule" to create your first intercept rule
+2. Click "Add Rule" to create your first intercept rule (interception is always on)
 
 ![Main Screen](img/main-screen.png)
 ![Add Rule Screen](img/add-rule-screen.png)

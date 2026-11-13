@@ -3,8 +3,6 @@
 let currentEditIndex = -1;
 
 // DOM Elements
-const enableToggle = document.getElementById('enableToggle');
-const statusText = document.getElementById('statusText');
 const addRuleBtn = document.getElementById('addRuleBtn');
 const clearAllBtn = document.getElementById('clearAllBtn');
 const rulesList = document.getElementById('rulesList');
@@ -16,14 +14,12 @@ const closeBtn = document.querySelector('.close');
 
 // Initialize popup
 async function init() {
-  await loadStatus();
   await loadRules();
   setupEventListeners();
 }
 
 // Setup event listeners
 function setupEventListeners() {
-  enableToggle.addEventListener('change', handleToggleChange);
   addRuleBtn.addEventListener('click', () => openModal());
   clearAllBtn.addEventListener('click', clearAllRules);
   // cancelBtn.addEventListener('click', closeModal);
@@ -52,45 +48,6 @@ function setupEventListeners() {
       deleteRule(index);
     }
   });
-}
-
-// Load intercept status
-async function loadStatus() {
-  const response = await sendMessage({ action: 'getStatus' });
-  enableToggle.checked = response.isEnabled;
-  updateStatusText(response.isEnabled);
-  rulesList.className = response.isEnabled ? 'rules-list intercept-active' : 'rules-list intercept-inactive';
-}
-
-// Update status text
-function updateStatusText(isEnabled) {
-  statusText.textContent = isEnabled ? 'Enabled' : 'Disabled';
-  statusText.style.color = isEnabled ? '#4CAF50' : '#666';
-}
-
-// Handle toggle change
-async function handleToggleChange(e) {
-  const enabled = e.target.checked;
-  
-  try {
-    const response = await sendMessage({ 
-      action: 'toggleIntercept', 
-      enabled 
-    });
-    
-    if (response.success) {
-      updateStatusText(enabled);
-      rulesList.className = enabled ? 'rules-list intercept-active' : 'rules-list intercept-inactive';
-    } else {
-      // Revert toggle if failed
-      e.target.checked = !enabled;
-      alert('Failed to toggle intercept');
-    }
-  } catch (error) {
-    console.error('Error toggling intercept:', error);
-    e.target.checked = !enabled;
-    alert('Error: ' + error.message);
-  }
 }
 
 // Load rules
