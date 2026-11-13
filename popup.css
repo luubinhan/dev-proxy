@@ -31,10 +31,31 @@ body {
 }
 
 header {
-  margin-bottom: 24px;
+  margin-bottom: 12px;
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.debugger-status {
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-color);
+  background: var(--blue-bg);
+  border: 1px solid var(--blue-line);
+}
+
+.debugger-status[data-state="ok"] {
+  border-color: var(--green);
+  color: var(--light-green);
+}
+
+.debugger-status[data-state="warn"] {
+  border-color: var(--yellow);
+  color: var(--light-yellow);
 }
 
 h1 {

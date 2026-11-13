@@ -14,8 +14,32 @@ const closeBtn = document.querySelector('.close');
 
 // Initialize popup
 async function init() {
-  await loadRules();
   setupEventListeners();
+  await refreshDebuggerStatus();
+  await loadRules();
+}
+
+async function refreshDebuggerStatus() {
+  const statusEl = document.getElementById('debuggerStatus');
+  if (!statusEl) return;
+
+  try {
+    const status = await sendMessage({ action: 'getStatus' });
+    if (status.debuggerAttached) {
+      statusEl.hidden = false;
+      statusEl.dataset.state = 'ok';
+      statusEl.textContent = 'Debugger attached — interception active on this tab';
+    } else {
+      statusEl.hidden = false;
+      statusEl.dataset.state = 'warn';
+      statusEl.textContent =
+        'Debugger NOT attached. Close DevTools on the page tab, then reopen this popup.';
+    }
+  } catch (error) {
+    statusEl.hidden = false;
+    statusEl.dataset.state = 'warn';
+    statusEl.textContent = 'Could not reach background: ' + error.message;
+  }
 }
 
 // Setup event listeners
@@ -148,17 +172,27 @@ async function handleFormSubmit(e) {
   const responseBodyStr = document.getElementById('responseBody').value.trim();
   const responseHeadersStr = document.getElementById('responseHeaders').value.trim();
   
-  // Auto-convert simple wildcard patterns to proper regex
-  // Check if it looks like a URL with wildcards but not already a regex
-  if (urlPattern.includes('*') && !urlPattern.includes('.*') && !urlPattern.includes('[') && !urlPattern.includes('(')) {
-    // Escape all special regex characters
+  // Auto-convert literal paths/URLs and simple wildcards to safe regex
+  const looksLiteralPath =
+    urlPattern.startsWith('/') ||
+    /^https?:\/\//i.test(urlPattern) ||
+    (urlPattern.includes('*') && !urlPattern.includes('.*'));
+
+  const alreadyRegex =
+    urlPattern.includes('.*') ||
+    urlPattern.startsWith('^') ||
+    urlPattern.endsWith('$') ||
+    urlPattern.includes('[') ||
+    urlPattern.includes('(');
+
+  if (looksLiteralPath && !alreadyRegex) {
     let escapedPattern = urlPattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
-    // Convert * to .*
     escapedPattern = escapedPattern.replace(/\*/g, '.*');
-    
+    // Path-only: allow match anywhere in the full request URL
+    if (urlPattern.startsWith('/') && !urlPattern.includes('*')) {
+      escapedPattern = '.*' + escapedPattern + '.*';
+    }
     urlPattern = escapedPattern;
-    
-    // Update the input to show the converted pattern
     document.getElementById('urlPattern').value = urlPattern;
   }
   
@@ -221,6 +255,7 @@ async function handleFormSubmit(e) {
     
     if (response.success) {
       closeModal();
+      await refreshDebuggerStatus();
       await loadRules();
     } else {
       alert('Failed to save rule: ' + (response.error || 'Unknown error'));
