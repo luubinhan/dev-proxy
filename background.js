@@ -1,12 +1,10 @@
 // Network Intercept Background Service Worker
 let interceptRules = [];
 let attachedTabs = new Set();
-let isEnabled = false;
 
 // MV3 workers are killed/restarted; always wait for storage before handling events
-const stateReady = chrome.storage.local.get(['interceptRules', 'isEnabled']).then((result) => {
+const stateReady = chrome.storage.local.get(['interceptRules']).then((result) => {
   interceptRules = result.interceptRules || [];
-  isEnabled = result.isEnabled || false;
 });
 
 async function ensureState() {
@@ -20,19 +18,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     switch (message.action) {
       case 'getStatus':
-        sendResponse({ isEnabled, attachedTabs: Array.from(attachedTabs) });
-        break;
-
-      case 'toggleIntercept':
-        isEnabled = message.enabled;
-        await chrome.storage.local.set({ isEnabled });
-
-        if (isEnabled) {
-          await attachDebuggerToActiveTab();
-        } else {
-          await detachAllDebuggers();
-        }
-        sendResponse({ success: true });
+        sendResponse({ isEnabled: true, attachedTabs: Array.from(attachedTabs) });
         break;
 
       case 'getRules':
@@ -92,18 +78,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true; // Keep message channel open for async response
 });
 
-// Re-attach after service worker restart if intercept was left enabled
+// Re-attach after service worker restart
 stateReady.then(async () => {
-  if (isEnabled) {
-    console.log('[DevProxy] Restored enabled state, re-attaching debugger');
-    await attachDebuggerToActiveTab();
-  }
+  console.log('[DevProxy] State ready, attaching debugger');
+  await attachDebuggerToActiveTab();
 });
 
-// Attach when user switches tabs while intercept is on
+// Attach when user switches tabs
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   await ensureState();
-  if (!isEnabled) return;
   try {
     await attachDebugger(activeInfo.tabId);
   } catch (error) {
@@ -111,10 +94,10 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
   }
 });
 
-// Attach on navigation in an already-watched workflow
+// Attach on navigation
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   await ensureState();
-  if (!isEnabled || changeInfo.status !== 'loading') return;
+  if (changeInfo.status !== 'loading') return;
   try {
     await attachDebugger(tabId);
   } catch (error) {
@@ -190,19 +173,6 @@ async function attachDebugger(tabId) {
   }
 }
 
-// Detach debugger from all tabs
-async function detachAllDebuggers() {
-  for (const tabId of attachedTabs) {
-    try {
-      await chrome.debugger.detach({ tabId });
-      console.log(`[DevProxy] Debugger detached from tab ${tabId}`);
-    } catch (error) {
-      console.error(`[DevProxy] Failed to detach debugger from tab ${tabId}:`, error);
-    }
-  }
-  attachedTabs.clear();
-}
-
 // Handle debugger events
 chrome.debugger.onEvent.addListener((source, method, params) => {
   if (method !== 'Fetch.requestPaused') return;
@@ -232,16 +202,6 @@ async function handleRequestPaused(tabId, params) {
   const url = request.url;
 
   await ensureState();
-
-  // If intercept was turned off (or state not ready previously), never leave the request hanging
-  if (!isEnabled) {
-    try {
-      await continueRequest(tabId, requestId);
-    } catch (error) {
-      console.error('[DevProxy] Error continuing request while disabled:', error);
-    }
-    return;
-  }
 
   // Skip preflight OPTIONS requests - let them pass through
   if (request.method === 'OPTIONS') {
@@ -376,11 +336,4 @@ async function applyRule(tabId, requestId, params, rule) {
 // Clean up when tab is closed
 chrome.tabs.onRemoved.addListener((tabId) => {
   attachedTabs.delete(tabId);
-
-  // Auto-disable extension when all tabs are closed
-  if (attachedTabs.size === 0 && isEnabled) {
-    isEnabled = false;
-    chrome.storage.local.set({ isEnabled });
-    console.log('[DevProxy] Extension auto-disabled: all attached tabs closed');
-  }
 });
