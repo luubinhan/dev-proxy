@@ -54,6 +54,10 @@ async function refreshDebuggerStatus() {
     if (status.debuggerAttached) {
       statusEl.dataset.state = 'ok';
       statusEl.textContent = status.attachMessage || 'Debugger attached — interception active on this tab';
+    } else if (status.attachReason === 'no_rules') {
+      statusEl.dataset.state = 'ok';
+      statusEl.textContent =
+        status.attachMessage || 'Interception off — add a rule to enable the debugger';
     } else {
       statusEl.dataset.state = 'warn';
       statusEl.textContent =

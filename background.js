@@ -14,6 +14,50 @@ async function ensureState() {
   await stateReady;
 }
 
+function hasRules() {
+  return interceptRules.length > 0;
+}
+
+async function detachDebugger(tabId) {
+  clearReattach(tabId);
+  const debuggee = debuggees.get(tabId) || (attachedTabs.has(tabId) ? { tabId } : null);
+  if (debuggee) {
+    try {
+      await chrome.debugger.detach(debuggee);
+    } catch (error) {
+      console.warn(`[DevProxy] Detach failed for tab ${tabId}:`, error);
+    }
+  }
+  forgetDebuggee(tabId);
+}
+
+async function disableInterception() {
+  const tabIds = new Set([...attachedTabs, ...debuggees.keys()]);
+  for (const tabId of [...reattachTimers.keys()]) {
+    tabIds.add(tabId);
+  }
+  for (const tabId of tabIds) {
+    await detachDebugger(tabId);
+  }
+}
+
+/** Attach when rules exist; otherwise detach and report idle. */
+async function syncInterception(preferredTabId) {
+  if (!hasRules()) {
+    await disableInterception();
+    return attachResult({
+      ok: false,
+      tabId: preferredTabId ?? null,
+      reason: 'no_rules',
+      message: 'Interception off — add a rule to enable the debugger'
+    });
+  }
+  if (preferredTabId != null) {
+    return attachDebugger(preferredTabId, { forceEnableFetch: true });
+  }
+  return attachDebuggerToActiveTab();
+}
+
 function isDevToolsConflict(message) {
   const msg = (message || '').toLowerCase();
   return msg.includes('another debugger') || msg.includes('devtools');
@@ -77,11 +121,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     switch (message.action) {
       case 'getStatus': {
-        const result = message.tabId != null
-          ? await attachDebugger(message.tabId, { forceEnableFetch: true })
-          : await attachDebuggerToActiveTab();
+        const result = await syncInterception(message.tabId);
         sendResponse({
-          isEnabled: true,
+          isEnabled: hasRules(),
           attachedTabs: Array.from(attachedTabs),
           activeTabId: result.tabId,
           debuggerAttached: result.ok,
@@ -93,9 +135,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       case 'ensureAttach': {
-        const result = message.tabId != null
-          ? await attachDebugger(message.tabId, { forceEnableFetch: true })
-          : await attachDebuggerToActiveTab();
+        const result = await syncInterception(message.tabId);
         sendResponse({
           success: result.ok,
           activeTabId: result.tabId,
@@ -108,22 +148,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       case 'getRules':
-        if (message.tabId != null) {
-          await attachDebugger(message.tabId, { forceEnableFetch: true });
-        } else {
-          await attachDebuggerToActiveTab();
-        }
+        await syncInterception(message.tabId);
         sendResponse({ rules: interceptRules });
         break;
 
       case 'addRule':
         interceptRules.push(message.rule);
         await chrome.storage.local.set({ interceptRules });
-        if (message.tabId != null) {
-          await attachDebugger(message.tabId, { forceEnableFetch: true });
-        } else {
-          await attachDebuggerToActiveTab();
-        }
+        await syncInterception(message.tabId);
         sendResponse({ success: true });
         break;
 
@@ -131,11 +163,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.index >= 0 && message.index < interceptRules.length) {
           interceptRules[message.index] = message.rule;
           await chrome.storage.local.set({ interceptRules });
-          if (message.tabId != null) {
-            await attachDebugger(message.tabId, { forceEnableFetch: true });
-          } else {
-            await attachDebuggerToActiveTab();
-          }
+          await syncInterception(message.tabId);
           sendResponse({ success: true });
         } else {
           sendResponse({ success: false, error: 'Invalid index' });
@@ -146,6 +174,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.index >= 0 && message.index < interceptRules.length) {
           interceptRules.splice(message.index, 1);
           await chrome.storage.local.set({ interceptRules });
+          await syncInterception(message.tabId);
           sendResponse({ success: true });
         } else {
           sendResponse({ success: false, error: 'Invalid index' });
@@ -165,6 +194,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'clearAllRules':
         interceptRules = [];
         await chrome.storage.local.set({ interceptRules });
+        await syncInterception(message.tabId);
         sendResponse({ success: true });
         break;
 
@@ -179,28 +209,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true; // Keep message channel open for async response
 });
 
-// Re-attach after service worker restart
+// Re-attach after service worker restart (only when rules exist)
 stateReady.then(async () => {
-  console.log('[DevProxy] State ready, attaching debugger');
-  await attachDebuggerToActiveTab();
+  console.log('[DevProxy] State ready, syncing interception');
+  await syncInterception();
 });
 
-// Attach when user switches tabs
+// Attach when user switches tabs (no-op when no rules)
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   await ensureState();
   try {
-    await attachDebugger(activeInfo.tabId, { forceEnableFetch: true });
+    await syncInterception(activeInfo.tabId);
   } catch (error) {
     console.error('[DevProxy] Error attaching on tab activate:', error);
   }
 });
 
-// Attach on navigation — always re-enable Fetch (domains can drop across navigations)
+// Attach on navigation — always re-enable Fetch when rules exist
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   await ensureState();
   if (changeInfo.status !== 'loading' && changeInfo.status !== 'complete') return;
   try {
-    await attachDebugger(tabId, { forceEnableFetch: true });
+    await syncInterception(tabId);
   } catch (error) {
     console.error('[DevProxy] Error attaching on tab update:', error);
   }
@@ -315,6 +345,16 @@ async function resolveDebuggeeForTab(tabId, tabUrl) {
  * @returns {Promise<{ok:boolean, tabId:number|null, url:string|null, reason:string, message:string}>}
  */
 async function attachDebugger(tabId, options = {}) {
+  if (!hasRules()) {
+    await detachDebugger(tabId);
+    return attachResult({
+      ok: false,
+      tabId,
+      reason: 'no_rules',
+      message: 'Interception off — add a rule to enable the debugger'
+    });
+  }
+
   const forceEnableFetch = options.forceEnableFetch === true;
   let tabUrl = null;
 
@@ -471,16 +511,18 @@ function clearReattach(tabId) {
 }
 
 function scheduleReattach(tabId, attempt = 1) {
-  if (tabId == null || attempt > 10) return;
+  if (tabId == null || attempt > 10 || !hasRules()) return;
   clearReattach(tabId);
   const delayMs = Math.min(1000 * attempt, 5000);
   const timer = setTimeout(async () => {
     reattachTimers.delete(tabId);
+    if (!hasRules()) return;
     try {
       const result = await attachDebugger(tabId, { forceEnableFetch: true });
       // Permanent failures should not loop
       if (
         result.ok ||
+        result.reason === 'no_rules' ||
         result.reason === 'extension_page' ||
         result.reason === 'unsupported_url' ||
         result.reason === 'tab_missing'
@@ -528,7 +570,7 @@ chrome.debugger.onDetach.addListener((source, reason) => {
     forgetDebuggee(tabId);
     console.log(`[DevProxy] Debugger detached from tab ${tabId}. Reason: ${reason}`);
     // Only soft-retry after DevTools replacement; avoid aggressive loops that re-hang tabs
-    if (reason === 'replaced_with_devtools') {
+    if (reason === 'replaced_with_devtools' && hasRules()) {
       scheduleReattach(tabId, 1);
     }
   } else {
