@@ -19,21 +19,46 @@ async function init() {
   await loadRules();
 }
 
+function isHttpTab(tab) {
+  const url = tab?.url || tab?.pendingUrl || '';
+  return url.startsWith('http://') || url.startsWith('https://');
+}
+
+async function getActivePageTab() {
+  // Resolve from popup context — more reliable than service worker currentWindow
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (active && isHttpTab(active)) return active;
+
+  // If user is on chrome:// or another extension page, prefer another http(s) tab in this window
+  if (active?.windowId != null) {
+    const tabs = await chrome.tabs.query({ windowId: active.windowId });
+    const httpTab = tabs.find(isHttpTab);
+    if (httpTab) return httpTab;
+  }
+
+  return active || null;
+}
+
 async function refreshDebuggerStatus() {
   const statusEl = document.getElementById('debuggerStatus');
   if (!statusEl) return;
 
   try {
-    const status = await sendMessage({ action: 'getStatus' });
+    const tab = await getActivePageTab();
+    const status = await sendMessage({
+      action: 'getStatus',
+      tabId: tab?.id
+    });
+
+    statusEl.hidden = false;
     if (status.debuggerAttached) {
-      statusEl.hidden = false;
       statusEl.dataset.state = 'ok';
-      statusEl.textContent = 'Debugger attached — interception active on this tab';
+      statusEl.textContent = status.attachMessage || 'Debugger attached — interception active on this tab';
     } else {
-      statusEl.hidden = false;
       statusEl.dataset.state = 'warn';
       statusEl.textContent =
-        'Debugger NOT attached. Close DevTools on the page tab, then reopen this popup.';
+        status.attachMessage ||
+        'Debugger NOT attached. Focus your app tab (http/https), close DevTools, then reopen this popup.';
     }
   } catch (error) {
     statusEl.hidden = false;
@@ -76,7 +101,8 @@ function setupEventListeners() {
 
 // Load rules
 async function loadRules() {
-  const response = await sendMessage({ action: 'getRules' });
+  const tab = await getActivePageTab();
+  const response = await sendMessage({ action: 'getRules', tabId: tab?.id });
   displayRules(response.rules);
 }
 
@@ -239,20 +265,23 @@ async function handleFormSubmit(e) {
   };
   
   try {
+    const tab = await getActivePageTab();
     let response;
     if (currentEditIndex >= 0) {
-      response = await sendMessage({ 
-        action: 'updateRule', 
-        index: currentEditIndex, 
-        rule 
+      response = await sendMessage({
+        action: 'updateRule',
+        index: currentEditIndex,
+        rule,
+        tabId: tab?.id
       });
     } else {
-      response = await sendMessage({ 
-        action: 'addRule', 
-        rule 
+      response = await sendMessage({
+        action: 'addRule',
+        rule,
+        tabId: tab?.id
       });
     }
-    
+
     if (response.success) {
       closeModal();
       await refreshDebuggerStatus();

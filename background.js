@@ -2,6 +2,8 @@
 let interceptRules = [];
 let attachedTabs = new Set();
 const reattachTimers = new Map(); // tabId -> timeout id
+const debuggees = new Map(); // tabId -> { tabId } | { targetId }
+const tabByTargetId = new Map(); // targetId -> tabId
 
 // MV3 workers are killed/restarted; always wait for storage before handling events
 const stateReady = chrome.storage.local.get(['interceptRules']).then((result) => {
@@ -19,7 +21,53 @@ function isDevToolsConflict(message) {
 
 function isAlreadyAttached(message) {
   const msg = (message || '').toLowerCase();
+  // Do not treat "Another debugger is already attached" as our own session
+  if (msg.includes('another debugger')) return false;
   return msg.includes('already attached');
+}
+
+function isExtensionUrlConflict(message) {
+  const msg = (message || '').toLowerCase();
+  return msg.includes('chrome-extension://') && msg.includes('different extension');
+}
+
+function isAttachableUrl(url) {
+  if (!url) return false;
+  return url.startsWith('http://') || url.startsWith('https://') || url.startsWith('file://');
+}
+
+function isBlockedUrl(url) {
+  if (!url) return true;
+  return (
+    url.startsWith('chrome://') ||
+    url.startsWith('chrome-extension://') ||
+    url.startsWith('devtools://') ||
+    url.startsWith('edge://') ||
+    url.startsWith('about:') ||
+    url.startsWith('view-source:')
+  );
+}
+
+function rememberDebuggee(tabId, debuggee) {
+  debuggees.set(tabId, debuggee);
+  if (debuggee.targetId) {
+    tabByTargetId.set(debuggee.targetId, tabId);
+  }
+}
+
+function forgetDebuggee(tabId) {
+  const debuggee = debuggees.get(tabId);
+  if (debuggee?.targetId) {
+    tabByTargetId.delete(debuggee.targetId);
+  }
+  debuggees.delete(tabId);
+  attachedTabs.delete(tabId);
+}
+
+function resolveTabIdFromSource(source) {
+  if (source?.tabId != null) return source.tabId;
+  if (source?.targetId) return tabByTargetId.get(source.targetId) ?? null;
+  return null;
 }
 
 // Listen for messages from popup
@@ -29,36 +77,53 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     switch (message.action) {
       case 'getStatus': {
-        const tabId = await attachDebuggerToActiveTab();
+        const result = message.tabId != null
+          ? await attachDebugger(message.tabId, { forceEnableFetch: true })
+          : await attachDebuggerToActiveTab();
         sendResponse({
           isEnabled: true,
           attachedTabs: Array.from(attachedTabs),
-          activeTabId: tabId,
-          debuggerAttached: tabId != null && attachedTabs.has(tabId)
+          activeTabId: result.tabId,
+          debuggerAttached: result.ok,
+          attachReason: result.reason,
+          attachMessage: result.message,
+          tabUrl: result.url
         });
         break;
       }
 
       case 'ensureAttach': {
-        const tabId = await attachDebuggerToActiveTab();
+        const result = message.tabId != null
+          ? await attachDebugger(message.tabId, { forceEnableFetch: true })
+          : await attachDebuggerToActiveTab();
         sendResponse({
-          success: true,
-          activeTabId: tabId,
-          debuggerAttached: tabId != null && attachedTabs.has(tabId)
+          success: result.ok,
+          activeTabId: result.tabId,
+          debuggerAttached: result.ok,
+          attachReason: result.reason,
+          attachMessage: result.message,
+          tabUrl: result.url
         });
         break;
       }
 
       case 'getRules':
-        // Opening popup should keep debugger alive on the page being tested
-        await attachDebuggerToActiveTab();
+        if (message.tabId != null) {
+          await attachDebugger(message.tabId, { forceEnableFetch: true });
+        } else {
+          await attachDebuggerToActiveTab();
+        }
         sendResponse({ rules: interceptRules });
         break;
 
       case 'addRule':
         interceptRules.push(message.rule);
         await chrome.storage.local.set({ interceptRules });
-        await attachDebuggerToActiveTab();
+        if (message.tabId != null) {
+          await attachDebugger(message.tabId, { forceEnableFetch: true });
+        } else {
+          await attachDebuggerToActiveTab();
+        }
         sendResponse({ success: true });
         break;
 
@@ -66,7 +131,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.index >= 0 && message.index < interceptRules.length) {
           interceptRules[message.index] = message.rule;
           await chrome.storage.local.set({ interceptRules });
-          await attachDebuggerToActiveTab();
+          if (message.tabId != null) {
+            await attachDebugger(message.tabId, { forceEnableFetch: true });
+          } else {
+            await attachDebuggerToActiveTab();
+          }
           sendResponse({ success: true });
         } else {
           sendResponse({ success: false, error: 'Invalid index' });
@@ -120,7 +189,7 @@ stateReady.then(async () => {
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   await ensureState();
   try {
-    await attachDebugger(activeInfo.tabId);
+    await attachDebugger(activeInfo.tabId, { forceEnableFetch: true });
   } catch (error) {
     console.error('[DevProxy] Error attaching on tab activate:', error);
   }
@@ -137,91 +206,259 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   }
 });
 
-// Attach debugger to active tab; returns tabId or null
-async function attachDebuggerToActiveTab() {
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab && tab.id && isAttachableUrl(tab.url)) {
-      await attachDebugger(tab.id, { forceEnableFetch: true });
-      return tab.id;
-    }
-    return tab?.id ?? null;
-  } catch (error) {
-    console.error('[DevProxy] Error attaching debugger:', error);
-    return null;
-  }
+function attachResult( partial ) {
+  return {
+    ok: false,
+    tabId: null,
+    url: null,
+    reason: 'unknown',
+    message: '',
+    ...partial
+  };
 }
 
-function isAttachableUrl(url) {
-  if (!url) return false;
-  return url.startsWith('http://') || url.startsWith('https://') || url.startsWith('file://');
+// Prefer lastFocusedWindow — more reliable from MV3 service worker than currentWindow
+async function findCandidateTab(preferredTabId) {
+  if (preferredTabId != null) {
+    try {
+      const tab = await chrome.tabs.get(preferredTabId);
+      return tab;
+    } catch (_) {
+      // fall through
+    }
+  }
+
+  const queries = [
+    { active: true, lastFocusedWindow: true },
+    { active: true, currentWindow: true }
+  ];
+
+  for (const query of queries) {
+    try {
+      const [tab] = await chrome.tabs.query(query);
+      if (tab?.id) return tab;
+    } catch (_) {
+      // try next
+    }
+  }
+  return null;
+}
+
+async function attachDebuggerToActiveTab() {
+  const tab = await findCandidateTab();
+  if (!tab?.id) {
+    return attachResult({
+      reason: 'no_tab',
+      message: 'No active tab found. Focus your app tab, then reopen this popup.'
+    });
+  }
+  return attachDebugger(tab.id, { forceEnableFetch: true });
+}
+
+/**
+ * Prefer a real http(s) page target for this tab.
+ * Attaching by tabId can hit PDF viewer / other-extension guests and fail.
+ */
+async function resolveDebuggeeForTab(tabId, tabUrl) {
+  let targets = [];
+  try {
+    targets = await chrome.debugger.getTargets();
+  } catch (error) {
+    console.warn('[DevProxy] getTargets failed:', error);
+  }
+
+  const related = targets.filter((t) => t.tabId === tabId);
+  const httpPage = related.find(
+    (t) => t.type === 'page' && isAttachableUrl(t.url) && !isBlockedUrl(t.url)
+  );
+
+  if (httpPage) {
+    return {
+      ok: true,
+      debuggee: { targetId: httpPage.id },
+      url: httpPage.url
+    };
+  }
+
+  const blocked = related.find((t) => isBlockedUrl(t.url) || String(t.url || '').startsWith('chrome-extension://'));
+  if (blocked || isBlockedUrl(tabUrl)) {
+    return {
+      ok: false,
+      reason: 'extension_page',
+      url: blocked?.url || tabUrl,
+      message:
+        'This tab is an extension/PDF/special page. Chrome blocks debugger attach there. ' +
+        'Click your normal website tab (https://...), then reopen DevProxy.'
+    };
+  }
+
+  if (isAttachableUrl(tabUrl)) {
+    return {
+      ok: true,
+      debuggee: { tabId },
+      url: tabUrl
+    };
+  }
+
+  return {
+    ok: false,
+    reason: 'unsupported_url',
+    url: tabUrl,
+    message: `Cannot attach to this page (${tabUrl || 'unknown'}). Open your http(s) app tab and retry.`
+  };
 }
 
 /**
  * Attach debugger and enable Fetch interception.
  * @param {number} tabId
  * @param {{ forceEnableFetch?: boolean }} [options]
+ * @returns {Promise<{ok:boolean, tabId:number|null, url:string|null, reason:string, message:string}>}
  */
 async function attachDebugger(tabId, options = {}) {
   const forceEnableFetch = options.forceEnableFetch === true;
+  let tabUrl = null;
 
   try {
     const tab = await chrome.tabs.get(tabId);
-    if (!isAttachableUrl(tab.url)) {
-      console.log(`[DevProxy] Skipping non-attachable tab ${tabId}: ${tab.url}`);
-      return;
+    tabUrl = tab.url || tab.pendingUrl || null;
+    if (isBlockedUrl(tabUrl) || !isAttachableUrl(tabUrl)) {
+      console.log(`[DevProxy] Skipping non-attachable tab ${tabId}: ${tabUrl}`);
+      clearReattach(tabId);
+      return attachResult({
+        tabId,
+        url: tabUrl,
+        reason: isBlockedUrl(tabUrl) ? 'extension_page' : 'unsupported_url',
+        message: isBlockedUrl(tabUrl)
+          ? `This tab is not a normal website (${tabUrl || 'unknown'}). Focus your https:// app tab, then reopen DevProxy.`
+          : `Cannot attach to this page (${tabUrl || 'unknown'}). Open your http(s) app tab and retry.`
+      });
     }
   } catch (error) {
     console.error(`[DevProxy] Could not get tab ${tabId}:`, error);
-    return;
+    return attachResult({
+      tabId,
+      reason: 'tab_missing',
+      message: `Could not read tab ${tabId}: ${error?.message || error}`
+    });
   }
 
   const alreadyTracked = attachedTabs.has(tabId);
   if (alreadyTracked && !forceEnableFetch) {
-    return;
+    return attachResult({
+      ok: true,
+      tabId,
+      url: tabUrl,
+      reason: 'already_tracked',
+      message: 'Debugger already active on this tab'
+    });
   }
 
+  const resolved = await resolveDebuggeeForTab(tabId, tabUrl);
+  if (!resolved.ok) {
+    clearReattach(tabId);
+    return attachResult({
+      tabId,
+      url: resolved.url || tabUrl,
+      reason: resolved.reason,
+      message: resolved.message
+    });
+  }
+
+  const debuggee = resolved.debuggee;
+  tabUrl = resolved.url || tabUrl;
+
   try {
-    await chrome.debugger.attach({ tabId }, '1.3');
+    await chrome.debugger.attach(debuggee, '1.3');
   } catch (error) {
     const message = error?.message || String(error);
+    if (isExtensionUrlConflict(message)) {
+      forgetDebuggee(tabId);
+      clearReattach(tabId);
+      console.warn(`[DevProxy] Extension-page attach blocked for tab ${tabId}:`, message);
+      return attachResult({
+        tabId,
+        url: tabUrl,
+        reason: 'extension_page',
+        message:
+          'Chrome blocked attach: this tab is backed by another extension (options page, PDF viewer, embedded browser, etc.). ' +
+          'Switch to a normal https:// website tab that calls the API, then reopen DevProxy.'
+      });
+    }
     if (isDevToolsConflict(message)) {
-      attachedTabs.delete(tabId);
+      forgetDebuggee(tabId);
       console.warn(
-        `[DevProxy] Cannot attach to tab ${tabId}: DevTools/another debugger owns it. ` +
-          'Close DevTools on that tab (or undock conflict), then reopen the DevProxy popup.'
+        `[DevProxy] Cannot attach to tab ${tabId}: DevTools/another debugger owns it.`
       );
       scheduleReattach(tabId);
-      return;
+      return attachResult({
+        tabId,
+        url: tabUrl,
+        reason: 'devtools_conflict',
+        message:
+          'DevTools (or another debugger) is attached to this tab. Close DevTools completely, then reopen this popup.'
+      });
     }
     if (!isAlreadyAttached(message)) {
       console.error(`[DevProxy] Failed to attach debugger to tab ${tabId}:`, error);
       scheduleReattach(tabId);
-      return;
+      return attachResult({
+        tabId,
+        url: tabUrl,
+        reason: 'attach_failed',
+        message: `Attach failed: ${message}`
+      });
     }
     console.log(`[DevProxy] Debugger already attached to tab ${tabId}, re-enabling Fetch`);
   }
 
   try {
-    await chrome.debugger.sendCommand({ tabId }, 'Network.enable');
-    await chrome.debugger.sendCommand({ tabId }, 'Fetch.enable', {
+    await chrome.debugger.sendCommand(debuggee, 'Network.enable');
+    // Only pause XHR/Fetch — NEVER Document/Script/Stylesheet/Image.
+    // Pausing all resources hangs the page if the service worker misses an event.
+    await chrome.debugger.sendCommand(debuggee, 'Fetch.enable', {
       patterns: [
-        { urlPattern: '*', requestStage: 'Request' }
+        { urlPattern: '*', resourceType: 'XHR', requestStage: 'Request' },
+        { urlPattern: '*', resourceType: 'Fetch', requestStage: 'Request' }
       ]
     });
 
+    rememberDebuggee(tabId, debuggee);
     attachedTabs.add(tabId);
     clearReattach(tabId);
-    console.log(`[DevProxy] Debugger ready on tab ${tabId}`);
+    console.log(`[DevProxy] Debugger ready on tab ${tabId}`, debuggee);
+    return attachResult({
+      ok: true,
+      tabId,
+      url: tabUrl,
+      reason: 'attached',
+      message: 'Debugger attached — interception active on this tab'
+    });
   } catch (error) {
+    const message = error?.message || String(error);
     console.error(`[DevProxy] Failed to enable Fetch on tab ${tabId}:`, error);
-    attachedTabs.delete(tabId);
+    forgetDebuggee(tabId);
     try {
-      await chrome.debugger.detach({ tabId });
+      await chrome.debugger.detach(debuggee);
     } catch (_) {
       // ignore
     }
+    if (isExtensionUrlConflict(message)) {
+      clearReattach(tabId);
+      return attachResult({
+        tabId,
+        url: tabUrl,
+        reason: 'extension_page',
+        message:
+          'Chrome blocked Fetch on an extension-backed tab. Use a normal https:// website tab instead.'
+      });
+    }
     scheduleReattach(tabId);
+    return attachResult({
+      tabId,
+      url: tabUrl,
+      reason: 'fetch_enable_failed',
+      message: `Attached but Fetch.enable failed: ${message}`
+    });
   }
 }
 
@@ -234,16 +471,23 @@ function clearReattach(tabId) {
 }
 
 function scheduleReattach(tabId, attempt = 1) {
-  if (attempt > 10) return;
+  if (tabId == null || attempt > 10) return;
   clearReattach(tabId);
   const delayMs = Math.min(1000 * attempt, 5000);
   const timer = setTimeout(async () => {
     reattachTimers.delete(tabId);
     try {
-      await attachDebugger(tabId, { forceEnableFetch: true });
-      if (!attachedTabs.has(tabId)) {
-        scheduleReattach(tabId, attempt + 1);
+      const result = await attachDebugger(tabId, { forceEnableFetch: true });
+      // Permanent failures should not loop
+      if (
+        result.ok ||
+        result.reason === 'extension_page' ||
+        result.reason === 'unsupported_url' ||
+        result.reason === 'tab_missing'
+      ) {
+        return;
       }
+      scheduleReattach(tabId, attempt + 1);
     } catch (_) {
       scheduleReattach(tabId, attempt + 1);
     }
@@ -251,77 +495,82 @@ function scheduleReattach(tabId, attempt = 1) {
   reattachTimers.set(tabId, timer);
 }
 
-// Handle debugger events
+async function safeContinue(debuggee, requestId, reason) {
+  try {
+    await chrome.debugger.sendCommand(debuggee, 'Fetch.continueRequest', { requestId });
+  } catch (error) {
+    console.error(`[DevProxy] Failed to continue request (${reason}):`, error);
+  }
+}
+
+// Handle debugger events — MUST always continue/fulfill/fail paused requests
 chrome.debugger.onEvent.addListener((source, method, params) => {
   if (method !== 'Fetch.requestPaused') return;
 
-  handleRequestPaused(source.tabId, params).catch((error) => {
+  const tabId = resolveTabIdFromSource(source);
+  // Always use the event's debuggee so continue works even if our maps were reset
+  const debuggee = source.targetId ? { targetId: source.targetId } : (source.tabId != null ? { tabId: source.tabId } : source);
+
+  if (tabId != null) {
+    rememberDebuggee(tabId, debuggee);
+  }
+
+  handleRequestPaused(debuggee, tabId, params).catch(async (error) => {
     console.error('[DevProxy] Unhandled requestPaused error:', error);
+    await safeContinue(debuggee, params.requestId, 'unhandled error');
   });
 });
 
 // Handle debugger detach — common when DevTools opens on the same tab
 chrome.debugger.onDetach.addListener((source, reason) => {
-  attachedTabs.delete(source.tabId);
-  console.log(`[DevProxy] Debugger detached from tab ${source.tabId}. Reason: ${reason}`);
-  // When DevTools replaces us, retry after it may have closed
-  scheduleReattach(source.tabId);
+  const tabId = resolveTabIdFromSource(source);
+  if (tabId != null) {
+    forgetDebuggee(tabId);
+    console.log(`[DevProxy] Debugger detached from tab ${tabId}. Reason: ${reason}`);
+    // Only soft-retry after DevTools replacement; avoid aggressive loops that re-hang tabs
+    if (reason === 'replaced_with_devtools') {
+      scheduleReattach(tabId, 1);
+    }
+  } else {
+    console.log('[DevProxy] Debugger detached from unknown target', source, reason);
+  }
 });
 
-async function continueRequest(tabId, requestId) {
-  await chrome.debugger.sendCommand(
-    { tabId },
-    'Fetch.continueRequest',
-    { requestId }
-  );
-}
-
-async function failRequest(tabId, requestId, errorReason = 'Failed') {
-  await chrome.debugger.sendCommand(
-    { tabId },
-    'Fetch.failRequest',
-    { requestId, errorReason }
-  );
-}
-
 // Handle request interception
-async function handleRequestPaused(tabId, params) {
+async function handleRequestPaused(debuggee, tabId, params) {
   const { requestId, request } = params;
   const url = request.url;
 
-  await ensureState();
+  try {
+    await ensureState();
 
-  // Skip preflight OPTIONS requests - let them pass through
-  if (request.method === 'OPTIONS') {
-    try {
-      await continueRequest(tabId, requestId);
-    } catch (error) {
-      console.error('[DevProxy] Error continuing preflight:', error);
+    // Skip preflight OPTIONS requests - let them pass through
+    if (request.method === 'OPTIONS') {
+      await safeContinue(debuggee, requestId, 'preflight');
+      return;
     }
-    return;
-  }
 
-  const matchingRule = interceptRules.find(rule => {
-    if (!rule.enabled) return false;
+    const matchingRule = interceptRules.find(rule => {
+      if (!rule.enabled) return false;
 
-    try {
-      const urlPattern = new RegExp(rule.urlPattern);
-      return urlPattern.test(url);
-    } catch (error) {
-      console.error('[DevProxy] Invalid pattern:', rule.urlPattern, error);
-      return false;
+      try {
+        const urlPattern = new RegExp(rule.urlPattern);
+        return urlPattern.test(url);
+      } catch (error) {
+        console.error('[DevProxy] Invalid pattern:', rule.urlPattern, error);
+        return false;
+      }
+    });
+
+    if (matchingRule) {
+      console.log('[DevProxy] MATCH', request.method, url, '→', matchingRule.urlPattern);
+      await applyRule(debuggee, requestId, params, matchingRule);
+    } else {
+      await safeContinue(debuggee, requestId, 'no match');
     }
-  });
-
-  if (matchingRule) {
-    console.log('[DevProxy] MATCH', request.method, url, '→', matchingRule.urlPattern);
-    await applyRule(tabId, requestId, params, matchingRule);
-  } else {
-    try {
-      await continueRequest(tabId, requestId);
-    } catch (error) {
-      console.error('[DevProxy] Error continuing request:', error);
-    }
+  } catch (error) {
+    console.error('[DevProxy] handleRequestPaused failed:', error);
+    await safeContinue(debuggee, requestId, 'handler catch');
   }
 }
 
@@ -333,16 +582,17 @@ function shouldFulfill(rule) {
 }
 
 // Apply interception rule
-async function applyRule(tabId, requestId, params, rule) {
+async function applyRule(debuggee, requestId, params, rule) {
   try {
-    // Apply delay if specified
-    if (rule.delay && rule.delay > 0) {
-      await new Promise(resolve => setTimeout(resolve, rule.delay));
+    // Cap delay so a bad rule cannot freeze the tab indefinitely
+    const delayMs = Math.min(Number(rule.delay) || 0, 30000);
+    if (delayMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, delayMs));
     }
 
     // Delay-only / passthrough rules: continue to network after waiting
     if (!shouldFulfill(rule)) {
-      await continueRequest(tabId, requestId);
+      await safeContinue(debuggee, requestId, 'delay-only');
       return;
     }
 
@@ -414,27 +664,18 @@ async function applyRule(tabId, requestId, params, rule) {
       fulfillParams.body = base64Body;
     }
 
-    await chrome.debugger.sendCommand(
-      { tabId },
-      'Fetch.fulfillRequest',
-      fulfillParams
-    );
+    await chrome.debugger.sendCommand(debuggee, 'Fetch.fulfillRequest', fulfillParams);
 
     console.log('[DevProxy] Fulfilled', requestId, 'with status', responseCode, '(network skipped)');
   } catch (error) {
-    console.error('[DevProxy] Error applying rule (will NOT hit real network):', error);
-
-    // Intentionally do not continueRequest — that would call the real endpoint (e.g. 200)
-    try {
-      await failRequest(tabId, requestId, 'Failed');
-    } catch (failError) {
-      console.error('[DevProxy] Error failing request after fulfill failure:', failError);
-    }
+    console.error('[DevProxy] Error applying rule, continuing to network:', error);
+    // Prefer continue over fail — failRequest can strand the app; continue keeps the tab usable
+    await safeContinue(debuggee, requestId, 'fulfill failed');
   }
 }
 
 // Clean up when tab is closed
 chrome.tabs.onRemoved.addListener((tabId) => {
-  attachedTabs.delete(tabId);
+  forgetDebuggee(tabId);
   clearReattach(tabId);
 });

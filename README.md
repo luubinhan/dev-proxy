@@ -140,9 +140,16 @@ network-intercept/
 ## Troubleshooting
 
 **Extension not intercepting requests?**
-- Make sure the toggle is enabled
-- Check that your URL pattern is correct (test with regex101.com)
-- Ensure the rule is enabled (checkmark should be visible)
+- Close DevTools on the page tab (only one debugger can attach). Reopen the DevProxy popup and confirm it says “Debugger attached”
+- Use a path/regex that matches the full request URL (e.g. `/middleware/iam/v2/register` or `.*register.*`)
+- Ensure the rule is enabled (green indicator)
+- Inspect the extension service worker console for `[DevProxy] MATCH` / `Fulfilled`
+- Only **XHR/Fetch** API calls are intercepted (page HTML/JS/CSS are never paused)
+
+**Page hangs / won’t load while extension is on?**
+- Reload the extension at `chrome://extensions`, then hard-refresh the tab
+- Close DevTools on that tab so DevProxy can attach cleanly
+- Avoid rules with very large Delay values
 
 **"Debugger attached" notification won't go away?**
 - This is expected behavior when the extension is enabled
